@@ -9,6 +9,9 @@ import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+const dbUrl = process.env.DATABASE_URL
+console.log('DATABASE_URL definida:', !!dbUrl, dbUrl ? '(primeiros 30 chars: ' + dbUrl.slice(0, 30) + '...)' : '(VAZIA/INDEFINIDA)')
+
 const isProduction = process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT != null
 const adapter = new PrismaPg({
   connectionString: process.env.DATABASE_URL,
