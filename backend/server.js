@@ -14,7 +14,13 @@ const prisma = new PrismaClient({ adapter })
 const app = Fastify({ logger: true })
 
 await app.register(cors, {
-  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: (origin, cb) => {
+    if (!origin || origin.includes('localhost') || origin.includes('127.0.0.1') || origin.includes('vercel.app')) {
+      cb(null, true)
+    } else {
+      cb(null, false)
+    }
+  }
 })
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

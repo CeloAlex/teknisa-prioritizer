@@ -2,7 +2,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 
-const API = '/api'
+const API = (import.meta.env.VITE_API_URL ?? '') + '/api'
 
 function appIssueToApi(i) {
   return {
