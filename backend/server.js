@@ -11,6 +11,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const dbUrl = process.env.DB_URL || process.env.DATABASE_URL
 console.log('DB_URL definida:', !!dbUrl, dbUrl ? '(primeiros 30 chars: ' + dbUrl.slice(0, 30) + '...)' : '(VAZIA/INDEFINIDA)')
+const dbKeys = Object.keys(process.env).filter(k => /database|db|pg|postgres|railway/i.test(k))
+console.log('Variáveis disponíveis:', dbKeys)
 
 const isProduction = process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT != null
 const adapter = new PrismaPg({
