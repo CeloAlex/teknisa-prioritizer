@@ -1,0 +1,102 @@
+/* ── Teknisa Prioritizer — global styles ─────────────────────────────────── */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  /* Backgrounds */
+  --color-background-primary:   #ffffff;
+  --color-background-secondary: #f8fafc;
+  --color-background-tertiary:  #f1f5f9;
+  --color-background-info:      #eff6ff;
+
+  /* Blue palette */
+  --color-blue-50:  #eff6ff;
+  --color-blue-100: #dbeafe;
+  --color-blue-200: #bfdbfe;
+  --color-blue-600: #185FA5;
+  --color-blue-700: #1451913;
+
+  /* Borders */
+  --color-border-secondary: #cbd5e1;
+  --color-border-tertiary:  #e2e8f0;
+
+  /* Text */
+  --color-text-primary:   #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-tertiary:  #94a3b8;
+  --color-text-info:      #185FA5;
+
+  /* Shadows */
+  --shadow-sm:    0 1px 3px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-md:    0 4px 12px rgba(0,0,0,.09), 0 2px 4px rgba(0,0,0,.05);
+  --shadow-lg:    0 8px 24px rgba(0,0,0,.11), 0 3px 8px rgba(0,0,0,.06);
+  --shadow-modal: 0 24px 64px rgba(0,0,0,.18), 0 8px 20px rgba(0,0,0,.10);
+
+  font-family: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--color-background-tertiary);
+  color: var(--color-text-primary);
+}
+
+#root { width: 100%; min-height: 100vh; }
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar              { width: 6px; height: 6px; }
+::-webkit-scrollbar-track        { background: transparent; }
+::-webkit-scrollbar-thumb        { background: #cbd5e1; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover  { background: #94a3b8; }
+
+/* ── Inputs & selects ─────────────────────────────────────────────────────── */
+input, select, textarea {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  background: var(--color-background-secondary);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+  width: 100%;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--color-blue-600);
+  box-shadow: 0 0 0 3px rgba(24,95,165,.12);
+}
+input::placeholder, textarea::placeholder {
+  color: var(--color-text-tertiary);
+}
+select {
+  cursor: pointer;
+  appearance: auto;
+}
+textarea { resize: vertical; min-height: 72px; }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 8px;
+  border: none;
+  transition: filter .12s, box-shadow .12s, background .12s;
+}
+button:hover  { filter: brightness(0.94); }
+button:active { filter: brightness(0.88); transform: scale(0.98); }
+button:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+
+/* ── Animations ───────────────────────────────────────────────────────────── */
+@keyframes spin      { to { transform: rotate(360deg); } }
+@keyframes fadeIn    { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+@keyframes slideUp   { from { opacity:0; transform:translateY(20px) scale(.98); } to { opacity:1; transform:translateY(0) scale(1); } }

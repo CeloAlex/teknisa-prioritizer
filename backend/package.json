@@ -1,0 +1,32 @@
+{
+  "name": "teknisa-prioritizer-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "serve": "npm run build --prefix ../frontend && node server.js",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "node prisma/seed.js",
+    "db:extract": "node prisma/extract.mjs",
+    "db:seed-segmentos": "node prisma/seed-segmentos.js",
+    "db:seed-criterios": "node prisma/seed-criterios.js",
+    "db:assign-criterios-hcm": "node prisma/assign-criterios-hcm.mjs",
+    "db:reset-criterios-hcm": "node prisma/reset-criterios-hcm.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "@fastify/static": "^9.1.3",
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.8.5",
+    "pg": "^8.21.0",
+    "prisma": "^7.8.0"
+  }
+}

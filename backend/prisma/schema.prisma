@@ -1,0 +1,81 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Issue {
+  id              Int      @id
+  nome            String
+  categoria       String?
+  cliente         String?
+  produto         String?
+  status          String?
+  dataAbertura    DateTime?
+  roadmap         Boolean  @default(false)
+  atendeMultiplos Boolean  @default(false)
+  valor           Float?
+  curva           String?
+  observacao      String?
+  impeditiva      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Client {
+  id             Int      @id @default(autoincrement())
+  nome           String   @unique
+  aceite         DateTime?
+  faturamento    Float?
+  tipo           String?
+  curva          String?
+  riscoChurn     Boolean  @default(false)
+  projeto        Boolean  @default(false)
+  qtdImpeditivas Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Depara {
+  id               Int    @id @default(autoincrement())
+  nomeCliente      String
+  nomeClienteIssue String
+
+  @@unique([nomeCliente, nomeClienteIssue])
+}
+
+model Segmento {
+  id        Int        @id @default(autoincrement())
+  nome      String     @unique
+  produtos  Produto[]
+  criterios Criterio[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model Produto {
+  id         Int      @id @default(autoincrement())
+  nome       String   @unique
+  segmentoId Int
+  segmento   Segmento @relation(fields: [segmentoId], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Criterio {
+  id         Int       @id @default(autoincrement())
+  nome       String
+  peso       Int       @default(0)
+  tipo       String                    // "issue" | "cliente"
+  atributo   String
+  direcao    String    @default("desc") // "asc" | "desc"
+  ativo      Boolean   @default(true)
+  padrao     Boolean   @default(false)
+  segmentoId Int?
+  segmento   Segmento? @relation(fields: [segmentoId], references: [id])
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
