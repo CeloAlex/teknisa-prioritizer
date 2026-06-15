@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "build": "npm ci --prefix backend && cd backend && npx prisma generate",
-    "start": "cd backend && npx prisma migrate deploy && node server.js"
+    "start": "cd backend && node server.js"
   },
   "engines": {
     "node": ">=20"
