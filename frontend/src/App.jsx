@@ -40,7 +40,7 @@ function apiClientToApp(c) {
 
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-const DONE_STATUS_KEYS = new Set(["concluída","concluida","em teste","testado","testada","aguardando cliente"]);
+const DONE_STATUS_KEYS = new Set(["concluída","concluida","em teste","testado","testada","aguardando cliente","homologado","homologada"]);
 function isDone(st) { return st ? DONE_STATUS_KEYS.has(st.toLowerCase().trim()) : false; }
 const CURVE_ORDER = { S:0, A:1, B:2, C:3, D:4 };
 const SLA_DIAS = { S:90, A:90, B:150 };
@@ -1035,7 +1035,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
         return typeof av === "string" ? mul * av.localeCompare(bv, "pt-BR", {sensitivity:"base"}) : mul * (av - bv);
       })
     : issues;
-  const allStatuses   = useMemo(() => [...new Set(issuesData.map(x => x.st))].sort(),   [issuesData]);
+  const allStatuses   = useMemo(() => [...new Set([...issuesData.map(x => x.st), "Homologado"])].filter(Boolean).sort(), [issuesData]);
   const allCategorias = useMemo(() => [...new Set(issuesData.map(x => x.cat))].sort(),  [issuesData]);
   const allProdutos   = useMemo(() => [...new Set(issuesData.map(x => x.prod))].sort(), [issuesData]);
   const allSegmentos  = useMemo(() => (segmentosData ?? []).map(s => s.nome).sort(),    [segmentosData]);
@@ -1562,7 +1562,21 @@ function ImportIssueModal({ onClose, onSave, existingIssues }) {
 
   function handleImport() {
     if (preview.length === 0) return;
-    onSave(preview.map(({ _op, ...iss }) => iss));
+    const issues = preview.map(({ _op, ...iss }) => {
+      if (_op === "update") {
+        const existing = existingIssues.find(x => x.id === iss.id);
+        if (existing) {
+          return {
+            ...iss,
+            rm:  existing.rm  ? existing.rm  : iss.rm,
+            mc:  existing.mc  ? existing.mc  : iss.mc,
+            val: (existing.val != null && existing.val > 0) ? existing.val : iss.val,
+          };
+        }
+      }
+      return iss;
+    });
+    onSave(issues);
     onClose();
   }
 
@@ -1675,7 +1689,7 @@ function ImportIssueModal({ onClose, onSave, existingIssues }) {
         <div>
           <FRow>
             <FInput label="Número da Issue *" value={form.id} onChange={v=>set("id",v)} type="number" />
-            <FInput label="Status" value={form.st} onChange={v=>set("st",v)} select options={["Backlog","Não iniciada","Em andamento","Especificação","Aceite","Aguardando cliente","Aguardando planejamento"]} />
+            <FInput label="Status" value={form.st} onChange={v=>set("st",v)} select options={["Backlog","Não iniciada","Em andamento","Especificação","Aceite","Aguardando cliente","Aguardando planejamento","Homologado"]} />
           </FRow>
 
           {/* Badge de upsert no cadastro manual */}
