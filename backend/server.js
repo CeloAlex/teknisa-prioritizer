@@ -29,7 +29,8 @@ await app.register(cors, {
     } else {
       cb(null, false)
     }
-  }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
 })
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
