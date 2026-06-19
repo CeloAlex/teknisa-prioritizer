@@ -8,35 +8,50 @@ datasource db {
 }
 
 model Issue {
-  id              Int      @id
-  nome            String
-  categoria       String?
-  cliente         String?
-  produto         String?
-  status          String?
-  dataAbertura    DateTime?
-  roadmap         Boolean  @default(false)
-  atendeMultiplos Boolean  @default(false)
-  valor           Float?
-  curva           String?
-  observacao      String?
-  impeditiva      Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id               Int       @id
+  nome             String
+  categoria        String?
+  cliente          String?
+  produto          String?
+  status           String?
+  dataAbertura     DateTime?
+  roadmap          Boolean   @default(false)
+  atendeMultiplos  Boolean   @default(false)
+  valor            Float?
+  curva            String?
+  observacao       String?
+  impeditiva       Boolean   @default(false)
+  aprovacao        String?
+  motivoReprovacao String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 }
 
 model Client {
-  id             Int      @id @default(autoincrement())
-  nome           String   @unique
-  aceite         DateTime?
-  faturamento    Float?
-  tipo           String?
-  curva          String?
-  riscoChurn     Boolean  @default(false)
-  projeto        Boolean  @default(false)
-  qtdImpeditivas Int      @default(0)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                   Int                   @id @default(autoincrement())
+  nome                 String                @unique
+  codigo               String?
+  aceite               DateTime?
+  faturamento          Float?
+  tipo                 String?
+  curva                String?
+  riscoChurn           Boolean               @default(false)
+  projeto              Boolean               @default(false)
+  qtdImpeditivas       Int                   @default(0)
+  faturamentoSegmentos FaturamentoSegmento[]
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+}
+
+model FaturamentoSegmento {
+  id         Int      @id @default(autoincrement())
+  clienteId  Int
+  cliente    Client   @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  segmentoId Int
+  segmento   Segmento @relation(fields: [segmentoId], references: [id], onDelete: Cascade)
+  valor      Float
+
+  @@unique([clienteId, segmentoId])
 }
 
 model Depara {
@@ -48,12 +63,13 @@ model Depara {
 }
 
 model Segmento {
-  id        Int        @id @default(autoincrement())
-  nome      String     @unique
-  produtos  Produto[]
-  criterios Criterio[]
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  id                   Int                   @id @default(autoincrement())
+  nome                 String                @unique
+  produtos             Produto[]
+  criterios            Criterio[]
+  faturamentoSegmentos FaturamentoSegmento[]
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
 }
 
 model Produto {
@@ -69,9 +85,9 @@ model Criterio {
   id         Int       @id @default(autoincrement())
   nome       String
   peso       Int       @default(0)
-  tipo       String                    // "issue" | "cliente"
+  tipo       String
   atributo   String
-  direcao    String    @default("desc") // "asc" | "desc"
+  direcao    String    @default("desc")
   ativo      Boolean   @default(true)
   padrao     Boolean   @default(false)
   segmentoId Int?

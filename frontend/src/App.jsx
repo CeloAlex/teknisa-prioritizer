@@ -11,6 +11,7 @@ function appIssueToApi(i) {
     roadmap: i.rm, atendeMultiplos: i.mc, valor: i.val ?? null,
     curva: i.curva ?? null, observacao: i.ob ?? null,
     impeditiva: !!i.imp,
+    aprovacao: i.ap ?? null, motivoReprovacao: i.mr ?? null,
   }
 }
 function apiIssueToApp(i) {
@@ -21,20 +22,23 @@ function apiIssueToApp(i) {
     val: i.valor, curva: i.curva, ob: i.observacao,
     seg: i.segmento ?? null, segOrd: i.segmentoOrdem ?? 999,
     imp: i.impeditiva ? 1 : 0,
+    ap: i.aprovacao ?? null, mr: i.motivoReprovacao ?? null,
   }
 }
 function appClientToApi(c) {
   return {
     nome: c.n, aceite: c.ac ?? null, faturamento: c.fat ?? null,
     tipo: c.tp ?? null, curva: c.cv ?? null, riscoChurn: c.ch,
-    projeto: c.pr,
+    projeto: c.pr, codigo: c.codigo ?? null,
   }
 }
 function apiClientToApp(c) {
   return {
-    n: c.nome, ac: c.aceite ? c.aceite.slice(0, 10) : null,
+    id: c.id, n: c.nome, ac: c.aceite ? c.aceite.slice(0, 10) : null,
     fat: c.faturamento, tp: c.tipo, cv: c.curva,
     ch: c.riscoChurn ? 1 : 0, pr: c.projeto ? 1 : 0, im: c.qtdImpeditivas,
+    codigo: c.codigo ?? null,
+    fatSegs: (c.faturamentoSegmentos ?? []).map(fs => ({ id: fs.id, segmentoId: fs.segmentoId, valor: fs.valor })),
   }
 }
 
@@ -494,14 +498,14 @@ function parseClientSheet(arrayBuffer) {
             ac = acRaw.slice(0,10);
           }
           clients.push({
-            n:   String(r[0] || "").trim(),
+            n:      String(r[0] || "").trim(),
             ac,
-            fat: Number(r[2]) || 0,
-            tp:  String(r[3] || "REAL").trim().toUpperCase(),
-            cv:  String(r[4] || "B").trim().toUpperCase(),
-            ch:  Number(r[5]) || 0,
-            pr:  Number(r[6]) || 0,
-            im:  Number(r[7]) || 0,
+            fat:    Number(r[2]) || 0,
+            tp:     String(r[3] || "REAL").trim().toUpperCase(),
+            cv:     String(r[4] || "B").trim().toUpperCase(),
+            ch:     Number(r[5]) || 0,
+            pr:     Number(r[6]) || 0,
+            codigo: String(r[7] || "").trim() || null,
           });
         }
         resolve(clients.filter(x => x.n));
@@ -522,7 +526,7 @@ export default function App() {
   const [issuesData, setIssuesData] = useState([]);
   const [clientsData, setClientsData] = useState([]);
   const [deparaData, setDeparaData]   = useState([]);
-  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], segmento:[], search:"" });
+  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], segmento:[], aprovacao:[], search:"" });
   const [showDone, setShowDone]     = useState(false);
   const [importModal, setImportModal] = useState(null); // "issue" | "client" | null
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -589,6 +593,7 @@ export default function App() {
       if (filters.categoria.length && !filters.categoria.includes(issue.cat)) return false;
       if (filters.produto.length   && !filters.produto.includes(issue.prod))  return false;
       if (filters.segmento.length  && !filters.segmento.includes(issue.seg))  return false;
+      if (filters.aprovacao.length && !filters.aprovacao.includes(issue.ap ?? "(Não analisado)")) return false;
       if (filters.search) {
         const q = normName(filters.search);
         if (!normName(issue.n).includes(q) && !normName(issue.cl).includes(q) && !String(issue.id).includes(q)) return false;
@@ -644,6 +649,29 @@ export default function App() {
       }
       return next;
     });
+  }
+
+  async function handleSaveFatSeg(clienteId, segmentoId, valor) {
+    const res = await fetch(API + "/faturamento-segmentos", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clienteId: Number(clienteId), segmentoId: Number(segmentoId), valor: Number(valor) }),
+    });
+    const data = await res.json();
+    setClientsData(prev => prev.map(c => {
+      if (c.id !== clienteId) return c;
+      const fatSegs = c.fatSegs ?? [];
+      const idx = fatSegs.findIndex(fs => fs.segmentoId === segmentoId);
+      if (idx >= 0) return { ...c, fatSegs: fatSegs.map((fs, i) => i === idx ? { ...fs, valor, id: data.id } : fs) };
+      return { ...c, fatSegs: [...fatSegs, { id: data.id, segmentoId, valor }] };
+    }));
+  }
+
+  async function handleDeleteFatSeg(fatSegId, clienteId, segmentoId) {
+    await fetch(API + "/faturamento-segmentos/" + fatSegId, { method: "DELETE" });
+    setClientsData(prev => prev.map(c => {
+      if (c.id !== clienteId) return c;
+      return { ...c, fatSegs: (c.fatSegs ?? []).filter(fs => fs.id !== fatSegId) };
+    }));
   }
 
   function toggleSelect(id) {
@@ -729,7 +757,7 @@ export default function App() {
     ));
   }
 
-  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.segmento.length || filters.search;
+  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.segmento.length || filters.aprovacao.length || filters.search;
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'100vh', fontFamily:'system-ui,sans-serif', gap:12 }}>
@@ -809,7 +837,7 @@ export default function App() {
         {(() => { const rs = selectedSegmento?.nome === "HCM"; return (<>
         {tab==="issues"       && <IssuesTab issues={filteredIssues} allIssues={sorted} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={selectedIds} toggleSelect={toggleSelect} toggleSelectAll={toggleSelectAll} onEditSave={handleAddIssues} requireSenha={rs} segmentosData={segmentosData} criteriaData={criteriaData} />}
         {tab==="especificacao"&& <IssuesTab issues={filteredEspec}  allIssues={sorted.filter(x=>x.st==="Especificação")} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={selectedIds} toggleSelect={toggleSelect} toggleSelectAll={toggleSelectAll} especMode onEditSave={handleAddIssues} requireSenha={rs} segmentosData={segmentosData} criteriaData={criteriaData} />}
-        {tab==="clientes"     && <ClientsTab clients={clientsData} onAddSingle={c => handleAddClients([c])} requireSenha={rs} />}
+        {tab==="clientes"     && <ClientsTab clients={clientsData} onAddSingle={c => handleAddClients([c])} requireSenha={rs} segmentosData={segmentosData} onSaveFatSeg={handleSaveFatSeg} onDeleteFatSeg={handleDeleteFatSeg} />}
         {tab==="criterios"    && <CriteriosTab criteriaData={criteriaData} issues={filteredIssues} onToggle={handleToggleCriterio} onSave={handleSaveCriterio} onDelete={handleDeleteCriterio} onReorder={handleReorderCriterio} requireSenha={rs} />}
         </>); })()}
       </div>
@@ -989,10 +1017,13 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, criteriaDa
           <Field label="Produto"           value={issue.prod} />
           <Field label="Data Abertura"     value={issue.dt} />
           <Field label="Dias em aberto"    value={days+" dias"} color={days>180?"#E24B4A":days>90?"#BA7517":undefined} />
-          <Field label="É Impeditiva"       value={issue.imp ? "Sim" : "Não"} color={issue.imp ? "#92400E" : undefined} />
+          <Field label="É Impeditiva"      value={issue.imp ? "Sim" : "Não"} color={issue.imp ? "#92400E" : undefined} />
           <Field label="Roadmap"           value={issue.rm ? "Sim" : "Não"} />
           <Field label="Atende +1 cliente" value={issue.mc ? "Sim" : "Não"} />
           <Field label="Valor"             value={issue.val>0 ? `R$ ${issue.val.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />
+          <Field label="Faturamento do cliente" value={issue._client ? `R$ ${(issue._client.fat||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />
+          <Field label="Aprovação" value={issue.ap ?? "(Não analisado)"} color={issue.ap==="Não"?"#A32D2D":issue.ap==="Sim"?"#27500A":undefined} />
+          {issue.ap==="Não" && issue.mr && <Field label="Motivo da reprovação" value={issue.mr} />}
           <div style={{ gridColumn:"1 / -1" }}>
             <div style={{ fontSize:11, color:"var(--color-text-tertiary)", marginBottom:4 }}>Critérios de Priorização</div>
             <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
@@ -1064,7 +1095,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             </button>
           )}
           {hasFilters && (
-            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], segmento:[], search:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
+            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], segmento:[], aprovacao:[], search:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
               <i className="ti ti-x" style={{ fontSize:13 }} aria-hidden /> Limpar
             </button>
           )}
@@ -1103,6 +1134,12 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
               onChange={v => sf("segmento", v)}
             />
           )}
+          <MultiSelect
+            placeholder="Aprovação (todas)"
+            options={["(Não analisado)", "Sim", "Não"]}
+            selected={filters.aprovacao}
+            onChange={v => sf("aprovacao", v)}
+          />
         </div>
         {/* Tags de filtros ativos */}
         {hasFilters && (
@@ -1112,6 +1149,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             {filters.categoria.map(v => <FilterTag key={v} label={v} onRemove={() => sf("categoria", filters.categoria.filter(x=>x!==v))} />)}
             {filters.produto.map(v => <FilterTag key={v} label={v} onRemove={() => sf("produto", filters.produto.filter(x=>x!==v))} />)}
             {filters.segmento.map(v => <FilterTag key={v} label={`Segmento: ${v}`} onRemove={() => sf("segmento", filters.segmento.filter(x=>x!==v))} />)}
+            {filters.aprovacao.map(v => <FilterTag key={v} label={`Aprovação: ${v}`} onRemove={() => sf("aprovacao", filters.aprovacao.filter(x=>x!==v))} />)}
             {filters.search && <FilterTag label={`"${filters.search}"`} onRemove={() => sf("search","")} />}
           </div>
         )}
@@ -1208,7 +1246,7 @@ function FilterTag({ label, onRemove }) {
 }
 
 // ── CLIENTS TAB ───────────────────────────────────────────────────────────────
-function ClientsTab({ clients, onAddSingle, requireSenha }) {
+function ClientsTab({ clients, onAddSingle, requireSenha, segmentosData, onSaveFatSeg, onDeleteFatSeg }) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editClient, setEditClient]       = useState(null);
@@ -1242,14 +1280,15 @@ function ClientsTab({ clients, onAddSingle, requireSenha }) {
         </button>
       </div>
       <div style={{ background:"var(--color-background-primary)", borderRadius:12, border:"0.5px solid var(--color-border-tertiary)", overflow:"hidden" }}>
-        <div style={{ padding:"10px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"grid", gridTemplateColumns:"3fr 1fr 1.5fr 1fr 1fr 1fr 1fr 36px", gap:8, fontSize:11, color:"var(--color-text-tertiary)", fontWeight:500 }}>
-          {th("Cliente","n")}{th("Curva","cv")}{th("Faturamento","fat")}{th("Tipo","tp")}{th("Churn","ch")}{th("Projeto","pr")}{th("Impeditivas","im")}<span />
+        <div style={{ padding:"10px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"grid", gridTemplateColumns:"2fr 0.8fr 1fr 1.2fr 1fr 1fr 1fr 1fr 36px", gap:8, fontSize:11, color:"var(--color-text-tertiary)", fontWeight:500 }}>
+          {th("Cliente","n")}{th("Código","codigo")}{th("Curva","cv")}{th("Faturamento","fat")}{th("Tipo","tp")}{th("Churn","ch")}{th("Projeto","pr")}{th("Impeditivas","im")}<span />
         </div>
         {sorted.map(c => {
           const cb = curveBadge(c.cv);
           return (
-            <div key={c.n+c.fat} style={{ padding:"10px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"grid", gridTemplateColumns:"3fr 1fr 1.5fr 1fr 1fr 1fr 1fr 36px", gap:8, alignItems:"center" }}>
+            <div key={c.n+c.fat} style={{ padding:"10px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"grid", gridTemplateColumns:"2fr 0.8fr 1fr 1.2fr 1fr 1fr 1fr 1fr 36px", gap:8, alignItems:"center" }}>
               <span style={{ fontSize:13, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.n}</span>
+              <span style={{ fontSize:12, color:"var(--color-text-secondary)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.codigo || "—"}</span>
               <span style={{ background:cb.bg, color:cb.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, textAlign:"center", border:`0.5px solid ${cb.border}44` }}>Curva {c.cv}</span>
               <span style={{ fontSize:12 }}>R$ {(c.fat||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
               <span style={{ fontSize:12, color:"var(--color-text-secondary)" }}>{c.tp}</span>
@@ -1257,7 +1296,7 @@ function ClientsTab({ clients, onAddSingle, requireSenha }) {
               <span>{c.pr ? <span style={{ color:"#185FA5",fontSize:12 }}>Sim</span> : <span style={{ color:"var(--color-text-tertiary)",fontSize:12 }}>Não</span>}</span>
               <span style={{ fontSize:12, textAlign:"center" }}>{c.im}</span>
               <button
-                onClick={() => { const d = { n:c.n, ac:c.ac??"", fat:(c.fat??0).toFixed(2), tp:c.tp??"REAL", cv:c.cv??"B", ch:String(c.ch??0), pr:String(c.pr??0) }; requireSenha ? setSenhaEditClient(d) : setEditClient(d); }}
+                onClick={() => { const d = { id:c.id, n:c.n, ac:c.ac??"", fat:(c.fat??0).toFixed(2), tp:c.tp??"REAL", cv:c.cv??"B", ch:String(c.ch??0), pr:String(c.pr??0), codigo:c.codigo??"", fatSegs:c.fatSegs??[] }; requireSenha ? setSenhaEditClient(d) : setEditClient(d); }}
                 title="Editar cliente"
                 style={{ padding:"3px 6px", borderRadius:6, border:"0.5px solid var(--color-border-secondary)", background:"transparent", cursor:"pointer", color:"var(--color-text-tertiary)", display:"flex", alignItems:"center", justifyContent:"center" }}
               >
@@ -1267,7 +1306,7 @@ function ClientsTab({ clients, onAddSingle, requireSenha }) {
           );
         })}
       </div>
-      {showForm   && <SingleClientModal onClose={() => setShowForm(false)}  onSave={c => { onAddSingle(c); setShowForm(false); }} />}
+      {showForm   && <SingleClientModal onClose={() => setShowForm(false)}  onSave={c => { onAddSingle(c); setShowForm(false); }} segmentosData={segmentosData} onSaveFatSeg={onSaveFatSeg} onDeleteFatSeg={onDeleteFatSeg} />}
       {senhaEditClient && (
         <PasswordModal
           title="Editar cliente"
@@ -1276,7 +1315,7 @@ function ClientsTab({ clients, onAddSingle, requireSenha }) {
           onClose={() => setSenhaEditClient(null)}
         />
       )}
-      {editClient && <SingleClientModal onClose={() => setEditClient(null)} onSave={c => { onAddSingle(c); setEditClient(null); }} initialData={editClient} />}
+      {editClient && <SingleClientModal onClose={() => setEditClient(null)} onSave={c => { onAddSingle(c); setEditClient(null); }} initialData={editClient} segmentosData={segmentosData} onSaveFatSeg={onSaveFatSeg} onDeleteFatSeg={onDeleteFatSeg} />}
     </div>
   );
 }
@@ -1736,7 +1775,7 @@ function ImportClientModal({ onClose, onSave, existingClients }) {
   const [preview, setPreview] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
-  const [form, setForm]       = useState({ n:"", ac:"", fat:"0", tp:"REAL", cv:"B", ch:"0", pr:"0" });
+  const [form, setForm]       = useState({ n:"", ac:"", fat:"0", tp:"REAL", cv:"B", ch:"0", pr:"0", codigo:"" });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
 
   // Verifica se o nome do formulário manual já existe
@@ -1766,7 +1805,7 @@ function ImportClientModal({ onClose, onSave, existingClients }) {
 
   function handleManualSave() {
     if (!form.n) return setError("Nome do cliente é obrigatório.");
-    onSave([{ ...form, fat:Number(form.fat), ch:Number(form.ch), pr:Number(form.pr) }]);
+    onSave([{ ...form, fat:Number(form.fat), ch:Number(form.ch), pr:Number(form.pr), codigo:form.codigo||null }]);
     onClose();
   }
 
@@ -1801,7 +1840,7 @@ function ImportClientModal({ onClose, onSave, existingClients }) {
             <div style={{ fontWeight:500, marginBottom:6, fontSize:13 }}>Layout esperado (linha 1 = cabeçalho):</div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:4 }}>
               {[["A","Cliente (nome)"],["B","Data Aceite (DD/MM/AAAA)"],["C","Faturamento Atual (R$)"],["D","Tipo (PROJETO/REAL)"],
-                ["E","Curva (S/A/B/C/D)"],["F","Risco Churn (0/1)"],["G","Em Projeto (0/1)"]].map(([col,desc]) => (
+                ["E","Curva (S/A/B/C/D)"],["F","Risco Churn (0/1)"],["G","Em Projeto (0/1)"],["H","Código do Cliente"]].map(([col,desc]) => (
                 <div key={col} style={{ display:"flex", gap:4, alignItems:"center" }}>
                   <span style={{ background:"var(--color-background-info)", color:"var(--color-text-info)", borderRadius:4, padding:"1px 6px", fontSize:11, fontWeight:500, flexShrink:0 }}>{col}</span>
                   <span style={{ color:"var(--color-text-secondary)", fontSize:11 }}>{desc}</span>
@@ -1892,7 +1931,10 @@ function ImportClientModal({ onClose, onSave, existingClients }) {
           )}
 
           <FRow>
+            <FInput label="Código do Cliente" value={form.codigo} onChange={v=>set("codigo",v)} />
             <FInput label="Data Aceite" value={form.ac} onChange={v=>set("ac",v)} type="date" />
+          </FRow>
+          <FRow>
             <FInput label="Faturamento Mensal (R$)" value={form.fat} onChange={v=>set("fat",v)} type="number" step="0.01" />
           </FRow>
           <FRow>
@@ -1922,18 +1964,20 @@ const PROD_OPTS = ["Teknisa HCM","Teknisa Portal do Funcionário","Teknisa Porta
 
 function SingleIssueModal({ onClose, onSave, existingIssues }) {
   const today = new Date().toISOString().slice(0,10);
-  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"Teknisa HCM", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", ob:"" });
+  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"Teknisa HCM", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", ob:"", ap:"", mr:"" });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
   const exists = form.id ? existingIssues.find(x => x.id === Number(form.id)) : null;
 
   function handleSave() {
     if (!form.id || !form.n || !form.cl) return alert("ID, nome e cliente são obrigatórios.");
+    if (form.ap === "Não" && !form.mr.trim()) return alert("Motivo da não aprovação é obrigatório.");
     onSave([{
       id: Number(form.id), n: form.n, cat: form.cat||null, cl: form.cl,
       prod: form.prod||null, st: form.st||null, dt: form.dt||null,
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
       val: form.val !== "" ? Number(form.val) : null,
       curva: form.curva||null, ob: form.ob||null,
+      ap: form.ap||null, mr: form.ap==="Não" ? form.mr||null : null,
     }]);
     onClose();
   }
@@ -1969,16 +2013,57 @@ function SingleIssueModal({ onClose, onSave, existingIssues }) {
         <FInput label="Roadmap" value={form.rm} onChange={v=>set("rm",v)} select options={BOOLOPS} />
         <FInput label="Atende +1 cliente" value={form.mc} onChange={v=>set("mc",v)} select options={BOOLOPS} />
       </FRow>
-      <FRow mb={0}>
-        <FInput label="Observação" value={form.ob} onChange={v=>set("ob",v)} type="textarea" />
+      <FRow>
+        <FInput label="Aprovação" value={form.ap} onChange={v=>set("ap",v)} select options={[{value:"",label:"(Não analisado)"},{value:"Sim",label:"Sim"},{value:"Não",label:"Não"}]} />
       </FRow>
+      {form.ap==="Não" && (
+        <FRow mb={0}>
+          <FInput label="Motivo da não aprovação *" value={form.mr} onChange={v=>set("mr",v)} type="textarea" />
+        </FRow>
+      )}
+      {form.ap!=="Não" && (
+        <FRow mb={0}>
+          <FInput label="Observação" value={form.ob} onChange={v=>set("ob",v)} type="textarea" />
+        </FRow>
+      )}
     </Modal>
   );
 }
 
+// Componente para editar faturamento de um segmento específico de um cliente
+function FatSegRow({ segNome, initialValue, fatSegId, clienteId, segmentoId, onSaveFatSeg, onDeleteFatSeg }) {
+  const [val, setVal] = useState(initialValue != null ? String(initialValue) : "");
+  const [saving, setSaving] = useState(false);
+  async function handleSave() {
+    const num = Number(val);
+    if (!val || num === 0) {
+      if (fatSegId) { setSaving(true); await onDeleteFatSeg(fatSegId, clienteId, segmentoId); setSaving(false); }
+      return;
+    }
+    setSaving(true);
+    await onSaveFatSeg(clienteId, segmentoId, num);
+    setSaving(false);
+  }
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+      <span style={{ flex:1, fontSize:13, color:"var(--color-text-secondary)" }}>{segNome}</span>
+      <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+        <input
+          type="number" step="0.01" value={val}
+          onChange={e => setVal(e.target.value)}
+          onBlur={handleSave}
+          placeholder="R$ 0,00"
+          style={{ width:130, padding:"6px 8px", borderRadius:6, border:"0.5px solid var(--color-border-secondary)", fontSize:13, background:"var(--color-background-secondary)" }}
+        />
+        {saving && <i className="ti ti-loader-2 ti-spin" style={{ fontSize:12, color:"var(--color-text-tertiary)" }} />}
+      </div>
+    </div>
+  );
+}
+
 // Cadastro rápido de cliente único (botão na aba Clientes)
-function SingleClientModal({ onClose, onSave, initialData }) {
-  const [form, setForm] = useState(initialData ?? { n:"", ac:"", fat:"0.00", tp:"REAL", cv:"B", ch:"0", pr:"0" });
+function SingleClientModal({ onClose, onSave, initialData, segmentosData, onSaveFatSeg, onDeleteFatSeg }) {
+  const [form, setForm] = useState(initialData ?? { n:"", ac:"", fat:"0.00", tp:"REAL", cv:"B", ch:"0", pr:"0", codigo:"", fatSegs:[] });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
   function handleSave() {
     if (!form.n) return alert("Nome do cliente é obrigatório.");
@@ -1986,12 +2071,40 @@ function SingleClientModal({ onClose, onSave, initialData }) {
     onClose();
   }
   const boolOpts = [{value:"0",label:"Não"},{value:"1",label:"Sim"}];
+  const isEdit = !!initialData?.id;
   return (
     <Modal title={initialData ? `Editar Cliente — ${initialData.n}` : "Cadastrar / Atualizar Cliente"} onClose={onClose} onSave={handleSave}>
       <FInput label="Nome do Cliente *" value={form.n} onChange={v=>set("n",v)} />
-      <FRow><FInput label="Data Aceite" value={form.ac} onChange={v=>set("ac",v)} type="date" /><FInput label="Faturamento Mensal (R$)" value={form.fat} onChange={v=>set("fat",v)} type="number" step="0.01" /></FRow>
+      <FRow><FInput label="Código do Cliente" value={form.codigo} onChange={v=>set("codigo",v)} /><FInput label="Data Aceite" value={form.ac} onChange={v=>set("ac",v)} type="date" /></FRow>
+      <FRow><FInput label="Faturamento Mensal Total (R$)" value={form.fat} onChange={v=>set("fat",v)} type="number" step="0.01" /></FRow>
       <FRow><FInput label="Curva" value={form.cv} onChange={v=>set("cv",v)} select options={["S","A","B","C","D"]} /><FInput label="Tipo" value={form.tp} onChange={v=>set("tp",v)} select options={["REAL","PROJETO"]} /></FRow>
       <FRow><FInput label="Risco de Churn" value={form.ch} onChange={v=>set("ch",v)} select options={boolOpts} /><FInput label="Em Projeto" value={form.pr} onChange={v=>set("pr",v)} select options={boolOpts} /></FRow>
+      {isEdit && segmentosData?.length > 0 && (
+        <div style={{ marginTop:16, borderTop:"0.5px solid var(--color-border-tertiary)", paddingTop:16 }}>
+          <div style={{ fontWeight:500, fontSize:13, marginBottom:10 }}>Faturamento por Segmento</div>
+          <div style={{ fontSize:12, color:"var(--color-text-tertiary)", marginBottom:10 }}>Salvo automaticamente ao sair do campo. Deixe em branco para remover.</div>
+          {segmentosData.map(seg => {
+            const existing = (form.fatSegs ?? []).find(fs => fs.segmentoId === seg.id);
+            return (
+              <FatSegRow
+                key={seg.id}
+                segNome={seg.nome}
+                initialValue={existing?.valor ?? null}
+                fatSegId={existing?.id ?? null}
+                clienteId={initialData.id}
+                segmentoId={seg.id}
+                onSaveFatSeg={onSaveFatSeg}
+                onDeleteFatSeg={onDeleteFatSeg}
+              />
+            );
+          })}
+        </div>
+      )}
+      {!isEdit && segmentosData?.length > 0 && (
+        <div style={{ marginTop:12, fontSize:12, color:"var(--color-text-tertiary)", padding:"8px 12px", background:"var(--color-background-secondary)", borderRadius:8 }}>
+          <i className="ti ti-info-circle" style={{ fontSize:12 }} /> Após salvar o cliente, edite-o novamente para configurar o faturamento por segmento.
+        </div>
+      )}
     </Modal>
   );
 }
@@ -2011,10 +2124,13 @@ function EditIssueModal({ issue, onClose, onSave }) {
     val:  (issue.val ?? 0).toFixed(2),
     curva: issue.curva ?? "",
     ob:   issue.ob   ?? "",
+    ap:   issue.ap   ?? "",
+    mr:   issue.mr   ?? "",
   });
   const set = (k, v) => setForm(f => ({...f, [k]: v}));
   function handleSave() {
     if (!form.n || !form.cl) return alert("Nome e cliente são obrigatórios.");
+    if (form.ap === "Não" && !form.mr.trim()) return alert("Motivo da não aprovação é obrigatório.");
     onSave([{
       id: issue.id, n: form.n, cat: form.cat || null, cl: form.cl,
       prod: form.prod || null, st: form.st || null, dt: form.dt || null,
@@ -2022,6 +2138,7 @@ function EditIssueModal({ issue, onClose, onSave }) {
       val: form.val !== "" ? Number(form.val) : null,
       curva: form.curva || null, ob: form.ob || null,
       seg: issue.seg, segOrd: issue.segOrd,
+      ap: form.ap || null, mr: form.ap === "Não" ? form.mr || null : null,
     }]);
     onClose();
   }
@@ -2050,7 +2167,11 @@ function EditIssueModal({ issue, onClose, onSave }) {
       </FRow>
       <FRow>
         <FInput label="Valor (R$)" value={form.val} onChange={v=>set("val",v)} type="number" step="0.01" />
+        <FInput label="Aprovação" value={form.ap} onChange={v=>set("ap",v)} select options={[{value:"",label:"(Não analisado)"},{value:"Sim",label:"Sim"},{value:"Não",label:"Não"}]} />
       </FRow>
+      {form.ap === "Não" && (
+        <FInput label="Motivo da não aprovação *" value={form.mr} onChange={v=>set("mr",v)} type="textarea" />
+      )}
       <FInput label="Observação" value={form.ob} onChange={v=>set("ob",v)} type="textarea" />
     </Modal>
   );

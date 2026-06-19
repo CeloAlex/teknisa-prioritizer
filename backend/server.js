@@ -119,7 +119,8 @@ app.get('/api/issues', async () => {
 
 app.post('/api/issues', async (req, reply) => {
   const { id, nome, categoria, cliente, produto, status, dataAbertura,
-          roadmap, atendeMultiplos, valor, curva, observacao, impeditiva } = req.body
+          roadmap, atendeMultiplos, valor, curva, observacao, impeditiva,
+          aprovacao, motivoReprovacao } = req.body
 
   if (!id || !nome) {
     return reply.status(400).send({ error: 'id e nome são obrigatórios' })
@@ -131,6 +132,8 @@ app.post('/api/issues', async (req, reply) => {
     roadmap: Boolean(roadmap), atendeMultiplos: Boolean(atendeMultiplos),
     valor: valor != null ? Number(valor) : null, curva, observacao,
     impeditiva: impeditiva != null ? Boolean(impeditiva) : false,
+    aprovacao: aprovacao ?? null,
+    motivoReprovacao: motivoReprovacao ?? null,
   }
 
   const issue = await prisma.issue.upsert({
@@ -165,11 +168,11 @@ app.delete('/api/issues/:id', async (req, reply) => {
 // ── Clients ─────────────────────────────────────────────────────────────────
 
 app.get('/api/clients', async () => {
-  return prisma.client.findMany({ orderBy: { nome: 'asc' } })
+  return prisma.client.findMany({ orderBy: { nome: 'asc' }, include: { faturamentoSegmentos: true } })
 })
 
 app.post('/api/clients', async (req, reply) => {
-  const { nome, aceite, faturamento, tipo, curva, riscoChurn, projeto } = req.body
+  const { nome, aceite, faturamento, tipo, curva, riscoChurn, projeto, codigo } = req.body
 
   if (!nome) {
     return reply.status(400).send({ error: 'nome é obrigatório' })
@@ -179,15 +182,37 @@ app.post('/api/clients', async (req, reply) => {
     aceite: aceite ? new Date(aceite) : null,
     faturamento: faturamento != null ? Number(faturamento) : null,
     tipo, curva, riscoChurn: Boolean(riscoChurn), projeto: Boolean(projeto),
+    codigo: codigo ?? null,
   }
 
   const client = await prisma.client.upsert({
     where:  { nome },
     update: baseFields,
     create: { nome, ...baseFields, qtdImpeditivas: 0 },
+    include: { faturamentoSegmentos: true },
   })
 
   return client
+})
+
+// ── Faturamento por Segmento ─────────────────────────────────────────────────
+
+app.put('/api/faturamento-segmentos', async (req, reply) => {
+  const { clienteId, segmentoId, valor } = req.body
+  if (!clienteId || !segmentoId || valor == null) {
+    return reply.status(400).send({ error: 'clienteId, segmentoId e valor são obrigatórios' })
+  }
+  const fs = await prisma.faturamentoSegmento.upsert({
+    where: { clienteId_segmentoId: { clienteId: Number(clienteId), segmentoId: Number(segmentoId) } },
+    update: { valor: Number(valor) },
+    create: { clienteId: Number(clienteId), segmentoId: Number(segmentoId), valor: Number(valor) },
+  })
+  return fs
+})
+
+app.delete('/api/faturamento-segmentos/:id', async (req, reply) => {
+  await prisma.faturamentoSegmento.delete({ where: { id: Number(req.params.id) } }).catch(() => null)
+  return reply.status(204).send()
 })
 
 // ── Depara ───────────────────────────────────────────────────────────────────
