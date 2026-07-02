@@ -20,6 +20,27 @@ const adapter = new PrismaPg({
   ...(isProduction ? { ssl: { rejectUnauthorized: false } } : {}),
 })
 const prisma = new PrismaClient({ adapter })
+
+async function applyMigrations() {
+  const steps = [
+    `ALTER TABLE "Issue" ADD COLUMN IF NOT EXISTS "aprovacao" TEXT`,
+    `ALTER TABLE "Issue" ADD COLUMN IF NOT EXISTS "motivoReprovacao" TEXT`,
+    `ALTER TABLE "Client" ADD COLUMN IF NOT EXISTS "codigo" TEXT`,
+    `CREATE TABLE IF NOT EXISTS "FaturamentoSegmento" (
+       id          SERIAL           PRIMARY KEY,
+       "clienteId"  INTEGER NOT NULL REFERENCES "Client"(id)   ON DELETE CASCADE,
+       "segmentoId" INTEGER NOT NULL REFERENCES "Segmento"(id) ON DELETE CASCADE,
+       valor       DOUBLE PRECISION NOT NULL,
+       UNIQUE("clienteId", "segmentoId")
+     )`,
+  ]
+  for (const sql of steps) {
+    await prisma.$executeRawUnsafe(sql)
+  }
+  console.log('[migration] schema up to date')
+}
+await applyMigrations()
+
 const app = Fastify({ logger: true })
 
 await app.register(cors, {
@@ -120,10 +141,18 @@ app.get('/api/issues', async () => {
 app.post('/api/issues', async (req, reply) => {
   const { id, nome, categoria, cliente, produto, status, dataAbertura,
           roadmap, atendeMultiplos, valor, curva, observacao, impeditiva,
-          aprovacao, motivoReprovacao } = req.body
+          aprovacao, motivoReprovacao, segmentoId } = req.body
 
   if (!id || !nome) {
     return reply.status(400).send({ error: 'id e nome são obrigatórios' })
+  }
+
+  if (produto && segmentoId) {
+    await prisma.produto.upsert({
+      where:  { nome: produto },
+      update: {},
+      create: { nome: produto, segmentoId: Number(segmentoId) },
+    })
   }
 
   const commonFields = {

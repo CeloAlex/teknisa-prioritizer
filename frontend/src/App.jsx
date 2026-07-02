@@ -620,18 +620,11 @@ export default function App() {
     await Promise.allSettled(
       issues.map(i => fetch(API + "/issues", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(appIssueToApi(i)),
+        body: JSON.stringify({ ...appIssueToApi(i), segmentoId: selectedSegmento?.id }),
       }))
     )
-    setIssuesData(prev => {
-      let next = [...prev];
-      for (const issue of issues) {
-        const idx = next.findIndex(x => x.id === issue.id);
-        if (idx >= 0) next[idx] = { ...next[idx], ...issue };
-        else next = [issue, ...next];
-      }
-      return next;
-    });
+    const fresh = await fetch(API + '/issues').then(r => r.json())
+    setIssuesData(fresh.map(apiIssueToApp))
   }
   async function handleAddClients(clients) {
     await Promise.allSettled(
@@ -835,8 +828,8 @@ export default function App() {
       <div style={{ padding:"24px", maxWidth:1280, margin:"0 auto" }}>
         {tab==="dashboard"    && <DashboardTab stats={stats} issues={sorted} enriched={segmentEnriched} criteriaData={criteriaData} segmento={selectedSegmento} />}
         {(() => { const rs = selectedSegmento?.nome === "HCM"; return (<>
-        {tab==="issues"       && <IssuesTab issues={filteredIssues} allIssues={sorted} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={selectedIds} toggleSelect={toggleSelect} toggleSelectAll={toggleSelectAll} onEditSave={handleAddIssues} requireSenha={rs} segmentosData={segmentosData} criteriaData={criteriaData} />}
-        {tab==="especificacao"&& <IssuesTab issues={filteredEspec}  allIssues={sorted.filter(x=>x.st==="Especificação")} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={selectedIds} toggleSelect={toggleSelect} toggleSelectAll={toggleSelectAll} especMode onEditSave={handleAddIssues} requireSenha={rs} segmentosData={segmentosData} criteriaData={criteriaData} />}
+        {tab==="issues"       && <IssuesTab issues={filteredIssues} allIssues={sorted} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={selectedIds} toggleSelect={toggleSelect} toggleSelectAll={toggleSelectAll} onEditSave={handleAddIssues} requireSenha={rs} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
+        {tab==="especificacao"&& <IssuesTab issues={filteredEspec}  allIssues={sorted.filter(x=>x.st==="Especificação")} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={selectedIds} toggleSelect={toggleSelect} toggleSelectAll={toggleSelectAll} especMode onEditSave={handleAddIssues} requireSenha={rs} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
         {tab==="clientes"     && <ClientsTab clients={clientsData} onAddSingle={c => handleAddClients([c])} requireSenha={rs} segmentosData={segmentosData} onSaveFatSeg={handleSaveFatSeg} onDeleteFatSeg={handleDeleteFatSeg} />}
         {tab==="criterios"    && <CriteriosTab criteriaData={criteriaData} issues={filteredIssues} onToggle={handleToggleCriterio} onSave={handleSaveCriterio} onDelete={handleDeleteCriterio} onReorder={handleReorderCriterio} requireSenha={rs} />}
         </>); })()}
@@ -891,7 +884,7 @@ export default function App() {
           </div>
         </div>
       )}
-      {importModal==="issue"  && <ImportIssueModal  onClose={() => setImportModal(null)} onSave={handleAddIssues}  existingIssues={issuesData} />}
+      {importModal==="issue"  && <ImportIssueModal  onClose={() => setImportModal(null)} onSave={handleAddIssues}  existingIssues={issuesData} selectedSegmento={selectedSegmento} />}
       {importModal==="client" && <ImportClientModal onClose={() => setImportModal(null)} onSave={handleAddClients} existingClients={clientsData} />}
     </div>
   );
@@ -1047,7 +1040,7 @@ function Field({ label, value, color }) {
 }
 
 // ── ISSUES TAB ────────────────────────────────────────────────────────────────
-function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDone, issuesData, hasFilters, especMode, selectedIds, toggleSelect, toggleSelectAll, onEditSave, requireSenha, segmentosData, criteriaData }) {
+function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDone, issuesData, hasFilters, especMode, selectedIds, toggleSelect, toggleSelectAll, onEditSave, requireSenha, segmentosData, criteriaData, selectedSegmento }) {
   function sf(k, v) { setFilters(f => ({...f,[k]:v})); }
   const [issueSort, setIssueSort]         = useState({ field: null, dir: "asc" });
   const [editIssue, setEditIssue]         = useState(null);
@@ -1223,6 +1216,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
       {newIssueOpen && (
         <SingleIssueModal
           existingIssues={issuesData}
+          selectedSegmento={selectedSegmento}
           onClose={() => setNewIssueOpen(false)}
           onSave={data => { onEditSave(data); setNewIssueOpen(false); }}
         />
@@ -1555,18 +1549,88 @@ function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReor
   );
 }
 
+// ── COMBOBOX DE PRODUTO COM CRIAÇÃO INLINE ────────────────────────────────────
+function CreatableProductSelect({ value, onChange, produtos, segmento, onAdd }) {
+  const [query, setQuery] = useState(value || "");
+  const [open, setOpen]   = useState(false);
+
+  const q        = query.toLowerCase().trim();
+  const filtered = q ? produtos.filter(p => p.nome.toLowerCase().includes(q)) : produtos;
+  const exact    = produtos.some(p => p.nome.toLowerCase() === q);
+  const canCreate = q && !exact;
+
+  function pick(nome) { onChange(nome); setQuery(nome); setOpen(false); }
+
+  return (
+    <div style={{ position:"relative" }}>
+      <input
+        value={query}
+        onChange={e => { setQuery(e.target.value); onChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        style={{ width:"100%", boxSizing:"border-box" }}
+        placeholder="Buscar ou criar produto…"
+      />
+      {open && (filtered.length > 0 || canCreate) && (
+        <div style={{
+          position:"absolute", top:"100%", left:0, right:0, zIndex:300,
+          background:"var(--color-background-primary)",
+          border:"0.5px solid var(--color-border-secondary)",
+          borderRadius:6, maxHeight:200, overflowY:"auto",
+          boxShadow:"0 4px 16px rgba(0,0,0,.14)",
+        }}>
+          {filtered.map(p => (
+            <div key={p.id} onMouseDown={() => pick(p.nome)}
+              style={{ padding:"7px 10px", cursor:"pointer", fontSize:13 }}>
+              {p.nome}
+            </div>
+          ))}
+          {canCreate && (
+            <div onMouseDown={() => { onAdd(query.trim()); setOpen(false); }}
+              style={{
+                padding:"7px 10px", cursor:"pointer", fontSize:13,
+                color:"var(--color-blue-600,#185FA5)",
+                borderTop: filtered.length ? "0.5px solid var(--color-border-tertiary)" : "none",
+              }}>
+              <i className="ti ti-plus" style={{ fontSize:11 }} /> Criar "{query.trim()}"
+              {segmento && <span style={{ fontSize:11, color:"var(--color-text-tertiary)", marginLeft:4 }}>→ {segmento.nome}</span>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── MODAL IMPORTAR ISSUES ────────────────────────────────────────────────────
-function ImportIssueModal({ onClose, onSave, existingIssues }) {
+function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento }) {
   const [tab, setTab]         = useState("file");
   const [file, setFile]       = useState(null);
   const [preview, setPreview] = useState([]); // [{...issue, _op:"insert"|"update"}]
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
+  const [produtos, setProdutos] = useState([]);
   const [form, setForm]       = useState({
-    id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"Teknisa HCM",
+    id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"",
     st:"Backlog", dt:new Date().toISOString().slice(0,10), rm:"0", mc:"0", imp:"0", val:"0"
   });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
+
+  useEffect(() => {
+    fetch(API + '/produtos').then(r => r.json()).then(setProdutos).catch(() => {})
+  }, []);
+
+  async function handleAddProd(nome) {
+    if (!selectedSegmento?.id) { setError("Selecione um segmento antes de criar um produto."); return; }
+    const res = await fetch(API + '/produtos', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nome, segmentoId: selectedSegmento.id }),
+    });
+    if (!res.ok) { setError("Erro ao criar produto."); return; }
+    const novo = await res.json();
+    setProdutos(prev => [...prev, novo]);
+    set("prod", nome);
+  }
 
   // Verifica se o ID do formulário manual já existe
   const manualExists = form.id
@@ -1742,7 +1806,16 @@ function ImportIssueModal({ onClose, onSave, existingIssues }) {
           <FInput label="Nome / Descrição *" value={form.n} onChange={v=>set("n",v)} />
           <FRow>
             <FInput label="Cliente *" value={form.cl} onChange={v=>set("cl",v)} />
-            <FInput label="Produto" value={form.prod} onChange={v=>set("prod",v)} select options={["Teknisa HCM","Teknisa Portal do Funcionário","Teknisa Portal do Gestor"]} />
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Produto</div>
+              <CreatableProductSelect
+                value={form.prod}
+                onChange={v => set("prod", v)}
+                produtos={produtos}
+                segmento={selectedSegmento}
+                onAdd={handleAddProd}
+              />
+            </div>
           </FRow>
           <FRow>
             <FInput label="Categoria" value={form.cat} onChange={v=>set("cat",v)} select options={["Erro - prioridade alta","Erro - prioridade média","Erro - prioridade baixa","Legislação","Implementação - Customização","Sugestão de melhoria","Evolução","Demanda de Atualização","Dúvida"]} />
@@ -1960,13 +2033,29 @@ function ImportClientModal({ onClose, onSave, existingClients }) {
 // ── MODAL NOVA ISSUE (cadastro individual) ────────────────────────────────────
 const BOOLOPS = [{value:"0",label:"Não"},{value:"1",label:"Sim"}];
 const CAT_OPTS = ["Erro - prioridade alta","Erro - prioridade média","Erro - prioridade baixa","Legislação","Implementação - Customização","Sugestão de melhoria","Evolução","Demanda de Atualização","Dúvida"];
-const PROD_OPTS = ["Teknisa HCM","Teknisa Portal do Funcionário","Teknisa Portal do Gestor"];
 
-function SingleIssueModal({ onClose, onSave, existingIssues }) {
+function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento }) {
   const today = new Date().toISOString().slice(0,10);
-  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"Teknisa HCM", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", ob:"", ap:"", mr:"" });
+  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", ob:"", ap:"", mr:"" });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
+  const [produtos, setProdutos] = useState([]);
   const exists = form.id ? existingIssues.find(x => x.id === Number(form.id)) : null;
+
+  useEffect(() => {
+    fetch(API + '/produtos').then(r => r.json()).then(setProdutos).catch(() => {})
+  }, []);
+
+  async function handleAddProd(nome) {
+    if (!selectedSegmento?.id) { alert("Selecione um segmento antes de criar um produto."); return; }
+    const res = await fetch(API + '/produtos', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nome, segmentoId: selectedSegmento.id }),
+    });
+    if (!res.ok) { alert("Erro ao criar produto."); return; }
+    const novo = await res.json();
+    setProdutos(prev => [...prev, novo]);
+    set("prod", nome);
+  }
 
   function handleSave() {
     if (!form.id || !form.n || !form.cl) return alert("ID, nome e cliente são obrigatórios.");
@@ -1998,7 +2087,16 @@ function SingleIssueModal({ onClose, onSave, existingIssues }) {
       </FRow>
       <FRow>
         <FInput label="Cliente *" value={form.cl} onChange={v=>set("cl",v)} />
-        <FInput label="Produto" value={form.prod} onChange={v=>set("prod",v)} select options={PROD_OPTS} />
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Produto</div>
+          <CreatableProductSelect
+            value={form.prod}
+            onChange={v => set("prod", v)}
+            produtos={produtos}
+            segmento={selectedSegmento}
+            onAdd={handleAddProd}
+          />
+        </div>
       </FRow>
       <FRow>
         <FInput label="Categoria" value={form.cat} onChange={v=>set("cat",v)} select options={CAT_OPTS} />
