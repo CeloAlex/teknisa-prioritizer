@@ -985,6 +985,7 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, criteriaDa
         )}
         <div onClick={() => setExpanded(!expanded)} style={{ display:"flex", alignItems:"center", gap:8, flex:1, overflow:"hidden", cursor:"pointer" }}>
         {rank && <span style={{ fontSize:11, color:"var(--color-text-tertiary)", minWidth:26, fontWeight:500 }}>#{rank}</span>}
+        <span style={{ fontSize:11, color:"var(--color-text-tertiary)", whiteSpace:"nowrap", flexShrink:0 }}>#{issue.id}</span>
         <span style={{ background:gs.bg, color:gs.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, whiteSpace:"nowrap", border:`0.5px solid ${gs.border}44`, flexShrink:0 }}>{gs.label}</span>
         <span style={{ background:cb.bg, color:cb.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, border:`0.5px solid ${cb.border}44`, flexShrink:0 }}>Curva {issue._curva}</span>
         {issue.imp === 1 && <span style={{ background:"#FFF7ED", color:"#92400E", border:"0.5px solid #FCD34D88", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, flexShrink:0 }}>⛔ Impeditiva</span>}
