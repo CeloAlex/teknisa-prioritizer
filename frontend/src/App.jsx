@@ -44,7 +44,7 @@ function apiClientToApp(c) {
 
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-const DONE_STATUS_KEYS = new Set(["concluída","concluida","em teste","testado","testada","aguardando cliente","homologado","homologada"]);
+const DONE_STATUS_KEYS = new Set(["concluída","concluida","em teste","testado","testada","aguardando cliente","homologado","homologada","encerrada pelo solicitante"]);
 function isDone(st) { return st ? DONE_STATUS_KEYS.has(st.toLowerCase().trim()) : false; }
 const CURVE_ORDER = { S:0, A:1, B:2, C:3, D:4 };
 const SLA_DIAS = { S:90, A:90, B:150 };
