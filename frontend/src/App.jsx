@@ -139,11 +139,12 @@ function getActiveCriteriaReasons(issue, criteriaData) {
   const reasons = [];
 
   for (const crit of active) {
-    const val = getFieldValue(issue, crit.tipo, crit.atributo);
+    const val = getFieldValue(issue, crit);
     if (val == null) continue;
     let label = null;
     switch (crit.atributo) {
       case "isErro":          if (val === 1) label = crit.nome; break;
+      case "categoriaValor":  if (val === 1) label = crit.nome; break;
       case "slaEstourado":    if (val > 0) label = `${crit.nome}: ${val} dias além do limite`; break;
       case "diasAberto":      if (val > 0) label = `${crit.nome}: ${val} dias`; break;
       case "curva":           label = crit.tipo === "issue"
@@ -222,6 +223,7 @@ const ATRIBUTOS_DISPONIVEIS = [
   { tipo:"issue",   value:"atendeMultiplos",  label:"Atende Múltiplos Clientes" },
   { tipo:"issue",   value:"valor",            label:"Valor (R$)" },
   { tipo:"issue",   value:"categoria",        label:"Categoria (texto)" },
+  { tipo:"issue",   value:"categoriaValor",   label:"Categoria (valor específico)" },
   { tipo:"issue",   value:"status",           label:"Status (texto)" },
   { tipo:"cliente", value:"curva",            label:"Curva do Cliente" },
   { tipo:"cliente", value:"faturamento",      label:"Faturamento" },
@@ -230,7 +232,8 @@ const ATRIBUTOS_DISPONIVEIS = [
   { tipo:"cliente", value:"qtdImpeditivas",   label:"Qtd. Impeditivas" },
 ];
 
-function getFieldValue(enrichedIssue, tipo, atributo) {
+function getFieldValue(enrichedIssue, crit) {
+  const { tipo, atributo, valor } = crit;
   if (tipo === "issue") {
     switch (atributo) {
       case "segmento":        return enrichedIssue.segOrd ?? 999;
@@ -243,6 +246,7 @@ function getFieldValue(enrichedIssue, tipo, atributo) {
       case "atendeMultiplos": return enrichedIssue.mc ? 1 : 0;
       case "valor":           return enrichedIssue.val ?? 0;
       case "categoria":       return enrichedIssue.cat ?? "";
+      case "categoriaValor":  return valor && enrichedIssue.cat === valor ? 1 : 0;
       case "status":          return enrichedIssue.st ?? "";
       default: return null;
     }
@@ -265,8 +269,8 @@ function sortByCriteria(issues, criteriaData) {
   if (!active.length) return issues;
   return [...issues].sort((a, b) => {
     for (const crit of active) {
-      const av = getFieldValue(a, crit.tipo, crit.atributo);
-      const bv = getFieldValue(b, crit.tipo, crit.atributo);
+      const av = getFieldValue(a, crit);
+      const bv = getFieldValue(b, crit);
       if (av == null && bv == null) continue;
       const mul = crit.direcao === "asc" ? 1 : -1;
       if (av == null) return mul;
@@ -1318,7 +1322,7 @@ function ClientsTab({ clients, onAddSingle, requireSenha, segmentosData, onSaveF
 // ── CRITERIOS TAB ─────────────────────────────────────────────────────────────
 function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReorder, requireSenha }) {
   const [showForm, setShowForm]           = useState(false);
-  const [form, setForm]                   = useState({ nome:"", peso:"", tipo:"issue", atributo:"isErro", direcao:"desc" });
+  const [form, setForm]                   = useState({ nome:"", peso:"", tipo:"issue", atributo:"isErro", valor:"", direcao:"desc" });
   const [delId, setDelId]                 = useState(null);
   const [senhaInativar, setSenhaInativar] = useState(null); // id do critério a inativar
   const [senhaExcluir, setSenhaExcluir]   = useState(null); // id do critério a excluir
@@ -1332,22 +1336,23 @@ function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReor
 
   function handleSave() {
     if (!form.nome.trim()) return;
+    if (form.atributo === "categoriaValor" && !form.valor) return;
     onSave({ ...form, peso: form.peso !== "" ? Number(form.peso) : undefined });
     setShowForm(false);
-    setForm({ nome:"", peso:"", tipo:"issue", atributo:"isErro", direcao:"desc" });
+    setForm({ nome:"", peso:"", tipo:"issue", atributo:"isErro", valor:"", direcao:"desc" });
   }
 
   function handleTipoChange(e) {
     const t = e.target.value;
     const firstAttr = ATRS_BY_TIPO[t][0]?.value ?? "";
     const defaultDir = direcaoOptionsFor(firstAttr)[0]?.value ?? "desc";
-    setForm(f => ({ ...f, tipo: t, atributo: firstAttr, direcao: defaultDir }));
+    setForm(f => ({ ...f, tipo: t, atributo: firstAttr, valor:"", direcao: defaultDir }));
   }
 
   function handleAtributoChange(e) {
     const a = e.target.value;
     const defaultDir = direcaoOptionsFor(a)[0]?.value ?? "desc";
-    setForm(f => ({ ...f, atributo: a, direcao: defaultDir }));
+    setForm(f => ({ ...f, atributo: a, valor:"", direcao: defaultDir }));
   }
 
   return (
@@ -1409,6 +1414,20 @@ function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReor
                 ))}
               </select>
             </div>
+            {form.atributo === "categoriaValor" && (
+              <div>
+                <label style={{ display:"block", fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Valor da categoria</label>
+                <select
+                  value={form.valor} onChange={e => setForm(f => ({...f, valor:e.target.value}))}
+                  style={{ width:"100%", padding:"8px 10px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", fontSize:13, background:"var(--color-background-secondary)", boxSizing:"border-box" }}
+                >
+                  <option value="">Selecione...</option>
+                  {CAT_OPTS.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div>
               <label style={{ display:"block", fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Ordenação</label>
               <select
@@ -1449,6 +1468,9 @@ function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReor
                   <span style={{ background:"var(--color-background-secondary)", borderRadius:4, padding:"1px 6px" }}>peso {c.peso}</span>
                   <span style={{ background:"var(--color-background-secondary)", borderRadius:4, padding:"1px 6px" }}>{c.tipo === "issue" ? "Issue" : "Cliente"}</span>
                   <span>{atr?.label ?? c.atributo}</span>
+                  {c.atributo === "categoriaValor" && c.valor && (
+                    <span style={{ background:"var(--color-background-secondary)", borderRadius:4, padding:"1px 6px" }}>{c.valor}</span>
+                  )}
                   <span style={{ color: c.direcao === "desc" ? "#185FA5" : "#3B6D11" }}>
                     {direcaoLabel(c.atributo, c.direcao)}
                   </span>

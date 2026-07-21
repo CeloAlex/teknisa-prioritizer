@@ -322,7 +322,7 @@ app.get('/api/criterios', async (req) => {
 })
 
 app.post('/api/criterios', async (req, reply) => {
-  const { nome, peso, tipo, atributo, direcao, ativo, padrao, segmentoId } = req.body
+  const { nome, peso, tipo, atributo, valor, direcao, ativo, padrao, segmentoId } = req.body
 
   if (!nome || !tipo || !atributo || segmentoId == null) {
     return reply.status(400).send({ error: 'nome, tipo, atributo e segmentoId são obrigatórios' })
@@ -334,6 +334,7 @@ app.post('/api/criterios', async (req, reply) => {
       peso:       peso     != null ? Number(peso)      : 0,
       tipo,
       atributo,
+      valor:      valor    ?? null,
       direcao:    direcao  ?? 'desc',
       ativo:      ativo    != null ? Boolean(ativo)    : true,
       padrao:     padrao   != null ? Boolean(padrao)   : false,
@@ -346,13 +347,14 @@ app.post('/api/criterios', async (req, reply) => {
 
 app.put('/api/criterios/:id', async (req, reply) => {
   const id = Number(req.params.id)
-  const { nome, peso, tipo, atributo, direcao, ativo } = req.body
+  const { nome, peso, tipo, atributo, valor, direcao, ativo } = req.body
 
   const data = {}
   if (nome      != null) data.nome     = nome
   if (peso      != null) data.peso     = Number(peso)
   if (tipo      != null) data.tipo     = tipo
   if (atributo  != null) data.atributo = atributo
+  if (valor     != null) data.valor    = valor
   if (direcao   != null) data.direcao  = direcao
   if (ativo     != null) data.ativo    = Boolean(ativo)
 

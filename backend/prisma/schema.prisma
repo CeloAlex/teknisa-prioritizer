@@ -87,6 +87,7 @@ model Criterio {
   peso       Int       @default(0)
   tipo       String
   atributo   String
+  valor      String?
   direcao    String    @default("desc")
   ativo      Boolean   @default(true)
   padrao     Boolean   @default(false)
