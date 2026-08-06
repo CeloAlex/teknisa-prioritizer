@@ -1,6 +1,7 @@
 ﻿
 import { useState, useMemo, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
+import teknisaLogo from "./assets/teknisa-logo.png";
 
 const API = (import.meta.env.VITE_API_URL ?? '') + '/api'
 
@@ -403,6 +404,57 @@ function MultiSelect({ label, options, selected, onChange, placeholder }) {
 
 // ── LOGIN / SESSÃO ─────────────────────────────────────────────────────────────
 
+const TEKNISA_BLUE      = "#0069FF"
+const TEKNISA_BLUE_DEEP = "#03204d"
+const TEKNISA_GREEN     = "#00B433"
+const TEKNISA_GOLD      = "#FFC000"
+
+// Ícones decorativos espalhados no fundo, remetendo a priorização/backlog
+const AUTH_BG_ICONS = [
+  { icon:"ti-list-check",     left:"6%",  top:"10%", size:120, rotate:-10 },
+  { icon:"ti-rocket",         left:"80%", top:"14%", size:150, rotate:14  },
+  { icon:"ti-trending-up",    left:"10%", top:"68%", size:130, rotate:8   },
+  { icon:"ti-layout-kanban",  left:"82%", top:"66%", size:110, rotate:-8  },
+  { icon:"ti-flag-3",         left:"48%", top:"4%",  size:64,  rotate:0   },
+  { icon:"ti-chart-bar",      left:"46%", top:"84%", size:80,  rotate:-6  },
+]
+
+function AuthLayout({ children }) {
+  return (
+    <div style={{
+      minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center",
+      position:"relative", overflow:"hidden", padding:24, boxSizing:"border-box",
+      fontFamily:"system-ui,sans-serif",
+      background:`linear-gradient(135deg, ${TEKNISA_BLUE_DEEP} 0%, #0B3E75 45%, ${TEKNISA_BLUE} 100%)`,
+    }}>
+      <div style={{ position:"absolute", top:"-12%", left:"-8%", width:420, height:420, borderRadius:"50%", background:TEKNISA_GREEN, opacity:0.16, filter:"blur(90px)", pointerEvents:"none" }} />
+      <div style={{ position:"absolute", bottom:"-16%", right:"-10%", width:480, height:480, borderRadius:"50%", background:TEKNISA_GOLD, opacity:0.14, filter:"blur(100px)", pointerEvents:"none" }} />
+      <div style={{ position:"absolute", top:"28%", right:"10%", width:260, height:260, borderRadius:"50%", background:"#fff", opacity:0.06, filter:"blur(70px)", pointerEvents:"none" }} />
+      {AUTH_BG_ICONS.map((ic, i) => (
+        <i key={i} className={`ti ${ic.icon}`} aria-hidden style={{
+          position:"absolute", left:ic.left, top:ic.top, fontSize:ic.size,
+          color:"#fff", opacity:0.08, transform:`rotate(${ic.rotate}deg)`, pointerEvents:"none",
+        }} />
+      ))}
+      <div style={{ position:"relative", zIndex:1, width:"100%", display:"flex", justifyContent:"center" }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function AuthCard({ children, width }) {
+  return (
+    <div style={{
+      background:"var(--color-background-primary)", borderRadius:16,
+      padding:32, width, boxSizing:"border-box",
+      boxShadow:"0 24px 64px rgba(3,32,77,.35), 0 8px 20px rgba(3,32,77,.18)",
+    }}>
+      {children}
+    </div>
+  )
+}
+
 function LoginScreen({ onSuccess }) {
   const [email, setEmail] = useState("")
   const [senha, setSenha] = useState("")
@@ -430,31 +482,28 @@ function LoginScreen({ onSuccess }) {
   }
 
   return (
-    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"var(--color-background-tertiary)", fontFamily:"system-ui,sans-serif" }}>
-      <form onSubmit={handleSubmit} style={{ background:"var(--color-background-primary)", borderRadius:16, border:"0.5px solid var(--color-border-tertiary)", padding:32, width:360, boxShadow:"var(--shadow-modal)" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
-          <div style={{ width:36, height:36, borderRadius:10, background:"#1a1a2e", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-            <i className="ti ti-rocket" style={{ fontSize:18, color:"#fff" }} aria-hidden />
+    <AuthLayout>
+      <AuthCard width={380}>
+        <form onSubmit={handleSubmit}>
+          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:6, marginBottom:26 }}>
+            <img src={teknisaLogo} alt="Teknisa" style={{ height:34, width:"auto" }} />
+            <div style={{ fontSize:12, color:"var(--color-text-secondary)", letterSpacing:".02em" }}>PRIORITIZER · Priorização de Backlog</div>
           </div>
-          <div>
-            <div style={{ fontWeight:500, fontSize:16 }}>Teknisa Prioritizer</div>
-            <div style={{ fontSize:12, color:"var(--color-text-secondary)" }}>Entre com seu e-mail e senha</div>
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>E-mail</div>
+            <input type="email" value={email} autoFocus onChange={e => setEmail(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
           </div>
-        </div>
-        <div style={{ marginBottom:12 }}>
-          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>E-mail</div>
-          <input type="email" value={email} autoFocus onChange={e => setEmail(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
-        </div>
-        <div style={{ marginBottom: erro ? 6 : 20 }}>
-          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Senha</div>
-          <input type="password" value={senha} onChange={e => setSenha(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
-        </div>
-        {erro && <div style={{ fontSize:12, color:"#A32D2D", marginBottom:16 }}>{erro}</div>}
-        <button type="submit" disabled={loading} style={{ width:"100%", padding:"9px 0", borderRadius:8, border:"none", background:"var(--color-blue-600)", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:600 }}>
-          {loading ? <><i className="ti ti-loader-2 ti-spin" /> Entrando...</> : "Entrar"}
-        </button>
-      </form>
-    </div>
+          <div style={{ marginBottom: erro ? 6 : 20 }}>
+            <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Senha</div>
+            <input type="password" value={senha} onChange={e => setSenha(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
+          </div>
+          {erro && <div style={{ fontSize:12, color:"#A32D2D", marginBottom:16 }}>{erro}</div>}
+          <button type="submit" disabled={loading} style={{ width:"100%", padding:"10px 0", borderRadius:8, border:"none", background:TEKNISA_BLUE, color:"#fff", cursor:"pointer", fontSize:13, fontWeight:600, boxShadow:`0 6px 16px rgba(0,105,255,.35)` }}>
+            {loading ? <><i className="ti ti-loader-2 ti-spin" /> Entrando...</> : "Entrar"}
+          </button>
+        </form>
+      </AuthCard>
+    </AuthLayout>
   )
 }
 
@@ -483,38 +532,43 @@ function ForcePasswordChangeScreen({ operador, onDone, onLogout }) {
   }
 
   return (
-    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"var(--color-background-tertiary)", fontFamily:"system-ui,sans-serif" }}>
-      <form onSubmit={handleSubmit} style={{ background:"var(--color-background-primary)", borderRadius:16, border:"0.5px solid var(--color-border-tertiary)", padding:32, width:380, boxShadow:"var(--shadow-modal)" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
-          <div style={{ width:36, height:36, borderRadius:10, background:"#FAEEDA", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-            <i className="ti ti-lock" style={{ fontSize:18, color:"#854F0B" }} aria-hidden />
+    <AuthLayout>
+      <AuthCard width={400}>
+        <form onSubmit={handleSubmit}>
+          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:6, marginBottom:20 }}>
+            <img src={teknisaLogo} alt="Teknisa" style={{ height:30, width:"auto" }} />
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:8 }}>
+              <div style={{ width:30, height:30, borderRadius:9, background:"#EFF6FF", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                <i className="ti ti-lock" style={{ fontSize:15, color:TEKNISA_BLUE }} aria-hidden />
+              </div>
+              <div style={{ fontWeight:500, fontSize:15 }}>Defina uma nova senha</div>
+            </div>
           </div>
-          <div style={{ fontWeight:500, fontSize:15 }}>Defina uma nova senha</div>
-        </div>
-        <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:20 }}>
-          Olá, {operador.nome}. Por segurança, defina uma nova senha antes de continuar.
-        </div>
-        <div style={{ marginBottom:12 }}>
-          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Senha atual</div>
-          <input type="password" value={senhaAtual} autoFocus onChange={e => setSenhaAtual(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
-        </div>
-        <div style={{ marginBottom:12 }}>
-          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Nova senha</div>
-          <input type="password" value={novaSenha} onChange={e => setNovaSenha(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
-        </div>
-        <div style={{ marginBottom: erro ? 6 : 20 }}>
-          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Confirmar nova senha</div>
-          <input type="password" value={confirmar} onChange={e => setConfirmar(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
-        </div>
-        {erro && <div style={{ fontSize:12, color:"#A32D2D", marginBottom:16 }}>{erro}</div>}
-        <div style={{ display:"flex", gap:8 }}>
-          <button type="button" onClick={onLogout} style={{ padding:"9px 16px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)", cursor:"pointer", fontSize:13, fontWeight:500 }}>Sair</button>
-          <button type="submit" disabled={loading} style={{ flex:1, padding:"9px 0", borderRadius:8, border:"none", background:"#854F0B", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:600 }}>
-            {loading ? <><i className="ti ti-loader-2 ti-spin" /> Salvando...</> : "Salvar e continuar"}
-          </button>
-        </div>
-      </form>
-    </div>
+          <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:20, textAlign:"center" }}>
+            Olá, {operador.nome}. Por segurança, defina uma nova senha antes de continuar.
+          </div>
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Senha atual</div>
+            <input type="password" value={senhaAtual} autoFocus onChange={e => setSenhaAtual(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
+          </div>
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Nova senha</div>
+            <input type="password" value={novaSenha} onChange={e => setNovaSenha(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
+          </div>
+          <div style={{ marginBottom: erro ? 6 : 20 }}>
+            <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Confirmar nova senha</div>
+            <input type="password" value={confirmar} onChange={e => setConfirmar(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
+          </div>
+          {erro && <div style={{ fontSize:12, color:"#A32D2D", marginBottom:16 }}>{erro}</div>}
+          <div style={{ display:"flex", gap:8 }}>
+            <button type="button" onClick={onLogout} style={{ padding:"10px 16px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)", cursor:"pointer", fontSize:13, fontWeight:500 }}>Sair</button>
+            <button type="submit" disabled={loading} style={{ flex:1, padding:"10px 0", borderRadius:8, border:"none", background:TEKNISA_BLUE, color:"#fff", cursor:"pointer", fontSize:13, fontWeight:600, boxShadow:`0 6px 16px rgba(0,105,255,.35)` }}>
+              {loading ? <><i className="ti ti-loader-2 ti-spin" /> Salvando...</> : "Salvar e continuar"}
+            </button>
+          </div>
+        </form>
+      </AuthCard>
+    </AuthLayout>
   )
 }
 
