@@ -487,7 +487,7 @@ function LoginScreen({ onSuccess }) {
         <form onSubmit={handleSubmit}>
           <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:6, marginBottom:26 }}>
             <img src={teknisaLogo} alt="Teknisa" style={{ height:34, width:"auto" }} />
-            <div style={{ fontSize:12, color:"var(--color-text-secondary)", letterSpacing:".02em" }}>PRIORITIZER · Priorização de Backlog</div>
+            <div style={{ fontSize:12, fontWeight:700, color:"var(--color-text-secondary)", letterSpacing:".02em" }}>Teknisa Prioritizer · Gestão de Valor</div>
           </div>
           <div style={{ marginBottom:12 }}>
             <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>E-mail</div>
