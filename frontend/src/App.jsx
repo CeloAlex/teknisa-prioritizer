@@ -4,6 +4,21 @@ import * as XLSX from "xlsx";
 
 const API = (import.meta.env.VITE_API_URL ?? '') + '/api'
 
+const TOKEN_KEY = 'tp_token'
+
+function apiFetch(url, opts = {}) {
+  const token = localStorage.getItem(TOKEN_KEY)
+  const headers = { ...(opts.headers || {}) }
+  if (token) headers.Authorization = 'Bearer ' + token
+  return fetch(url, { ...opts, headers }).then(res => {
+    if (res.status === 401) {
+      localStorage.removeItem(TOKEN_KEY)
+      window.location.reload()
+    }
+    return res
+  })
+}
+
 function appIssueToApi(i) {
   return {
     id: i.id, nome: i.n, categoria: i.cat ?? null, cliente: i.cl ?? null,
@@ -386,43 +401,119 @@ function MultiSelect({ label, options, selected, onChange, placeholder }) {
   );
 }
 
-// ── PASSWORD MODAL ────────────────────────────────────────────────────────────
-const SENHA_OP = "23Nov82**"
+// ── LOGIN / SESSÃO ─────────────────────────────────────────────────────────────
 
-function PasswordModal({ title, message, onConfirm, onClose }) {
+function LoginScreen({ onSuccess }) {
+  const [email, setEmail] = useState("")
   const [senha, setSenha] = useState("")
-  const [erro, setErro]   = useState(false)
+  const [erro, setErro]   = useState("")
+  const [loading, setLoading] = useState(false)
 
-  function tentar() {
-    if (senha === SENHA_OP) { onConfirm() }
-    else { setErro(true); setSenha("") }
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setErro("")
+    if (!email || !senha) { setErro("Informe e-mail e senha."); return }
+    setLoading(true)
+    try {
+      const res  = await fetch(API + '/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, senha }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setErro(data.error || "Credenciais inválidas."); setLoading(false); return }
+      localStorage.setItem(TOKEN_KEY, data.token)
+      onSuccess(data.operador)
+    } catch {
+      setErro("Não foi possível conectar ao servidor.")
+      setLoading(false)
+    }
   }
 
   return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:3000 }}>
-      <div style={{ background:"var(--color-background-primary)", borderRadius:16, border:"0.5px solid var(--color-border-tertiary)", padding:28, width:380 }}>
+    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"var(--color-background-tertiary)", fontFamily:"system-ui,sans-serif" }}>
+      <form onSubmit={handleSubmit} style={{ background:"var(--color-background-primary)", borderRadius:16, border:"0.5px solid var(--color-border-tertiary)", padding:32, width:360, boxShadow:"var(--shadow-modal)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:"#1a1a2e", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+            <i className="ti ti-rocket" style={{ fontSize:18, color:"#fff" }} aria-hidden />
+          </div>
+          <div>
+            <div style={{ fontWeight:500, fontSize:16 }}>Teknisa Prioritizer</div>
+            <div style={{ fontSize:12, color:"var(--color-text-secondary)" }}>Entre com seu e-mail e senha</div>
+          </div>
+        </div>
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>E-mail</div>
+          <input type="email" value={email} autoFocus onChange={e => setEmail(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
+        </div>
+        <div style={{ marginBottom: erro ? 6 : 20 }}>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Senha</div>
+          <input type="password" value={senha} onChange={e => setSenha(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
+        </div>
+        {erro && <div style={{ fontSize:12, color:"#A32D2D", marginBottom:16 }}>{erro}</div>}
+        <button type="submit" disabled={loading} style={{ width:"100%", padding:"9px 0", borderRadius:8, border:"none", background:"var(--color-blue-600)", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:600 }}>
+          {loading ? <><i className="ti ti-loader-2 ti-spin" /> Entrando...</> : "Entrar"}
+        </button>
+      </form>
+    </div>
+  )
+}
+
+function ForcePasswordChangeScreen({ operador, onDone, onLogout }) {
+  const [senhaAtual, setSenhaAtual] = useState("")
+  const [novaSenha, setNovaSenha]   = useState("")
+  const [confirmar, setConfirmar]   = useState("")
+  const [erro, setErro]             = useState("")
+  const [loading, setLoading]       = useState(false)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setErro("")
+    if (!senhaAtual || !novaSenha) { setErro("Preencha todos os campos."); return }
+    if (novaSenha.length < 6) { setErro("A nova senha deve ter ao menos 6 caracteres."); return }
+    if (novaSenha !== confirmar) { setErro("A confirmação não confere com a nova senha."); return }
+    setLoading(true)
+    const res  = await apiFetch(API + '/auth/change-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ senhaAtual, novaSenha }),
+    })
+    const data = await res.json()
+    setLoading(false)
+    if (!res.ok) { setErro(data.error || "Não foi possível trocar a senha."); return }
+    onDone(data)
+  }
+
+  return (
+    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"var(--color-background-tertiary)", fontFamily:"system-ui,sans-serif" }}>
+      <form onSubmit={handleSubmit} style={{ background:"var(--color-background-primary)", borderRadius:16, border:"0.5px solid var(--color-border-tertiary)", padding:32, width:380, boxShadow:"var(--shadow-modal)" }}>
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
           <div style={{ width:36, height:36, borderRadius:10, background:"#FAEEDA", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-            <i className="ti ti-lock" style={{ fontSize:18, color:"#854F0B" }} />
+            <i className="ti ti-lock" style={{ fontSize:18, color:"#854F0B" }} aria-hidden />
           </div>
-          <div style={{ fontWeight:500, fontSize:15 }}>{title}</div>
+          <div style={{ fontWeight:500, fontSize:15 }}>Defina uma nova senha</div>
         </div>
-        <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:16 }}>{message}</div>
-        <input
-          type="password" value={senha} autoFocus
-          onChange={e => { setSenha(e.target.value); setErro(false) }}
-          onKeyDown={e => e.key === "Enter" && tentar()}
-          placeholder="Senha de operação"
-          style={{ width:"100%", padding:"8px 10px", borderRadius:8, fontSize:13, boxSizing:"border-box",
-            border:`0.5px solid ${erro ? "#E24B4A" : "var(--color-border-secondary)"}`,
-            background:"var(--color-background-secondary)", marginBottom: erro ? 6 : 20 }}
-        />
-        {erro && <div style={{ fontSize:12, color:"#A32D2D", marginBottom:16 }}>Senha incorreta. Tente novamente.</div>}
-        <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
-          <button onClick={onClose} style={{ padding:"8px 20px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)", cursor:"pointer", fontSize:13, fontWeight:500 }}>Cancelar</button>
-          <button onClick={tentar} style={{ padding:"8px 20px", borderRadius:8, border:"none", background:"#854F0B", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:500 }}>Confirmar</button>
+        <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:20 }}>
+          Olá, {operador.nome}. Por segurança, defina uma nova senha antes de continuar.
         </div>
-      </div>
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Senha atual</div>
+          <input type="password" value={senhaAtual} autoFocus onChange={e => setSenhaAtual(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
+        </div>
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Nova senha</div>
+          <input type="password" value={novaSenha} onChange={e => setNovaSenha(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
+        </div>
+        <div style={{ marginBottom: erro ? 6 : 20 }}>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Confirmar nova senha</div>
+          <input type="password" value={confirmar} onChange={e => setConfirmar(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
+        </div>
+        {erro && <div style={{ fontSize:12, color:"#A32D2D", marginBottom:16 }}>{erro}</div>}
+        <div style={{ display:"flex", gap:8 }}>
+          <button type="button" onClick={onLogout} style={{ padding:"9px 16px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)", cursor:"pointer", fontSize:13, fontWeight:500 }}>Sair</button>
+          <button type="submit" disabled={loading} style={{ flex:1, padding:"9px 0", borderRadius:8, border:"none", background:"#854F0B", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:600 }}>
+            {loading ? <><i className="ti ti-loader-2 ti-spin" /> Salvando...</> : "Salvar e continuar"}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }
@@ -521,11 +612,51 @@ function parseClientSheet(arrayBuffer) {
 }
 
 // ── APP ───────────────────────────────────────────────────────────────────────
-const TABS = ["dashboard","issues","especificacao","clientes","criterios"];
-const TAB_LABELS = { dashboard:"Painel", issues:"Issues Priorizadas", especificacao:"Especificação", clientes:"Clientes", criterios:"Critérios" };
-const TAB_ICONS  = { dashboard:"ti-layout-dashboard", issues:"ti-list-check", especificacao:"ti-file-description", clientes:"ti-building-community", criterios:"ti-settings" };
+const PAPEL_LABELS = { ADMIN:"Administrador", EDITOR:"Editor", READONLY:"Somente Leitura" };
+const TAB_LABELS = { dashboard:"Painel", issues:"Issues Priorizadas", especificacao:"Especificação", clientes:"Clientes", criterios:"Critérios", operadores:"Operadores" };
+const TAB_ICONS  = { dashboard:"ti-layout-dashboard", issues:"ti-list-check", especificacao:"ti-file-description", clientes:"ti-building-community", criterios:"ti-settings", operadores:"ti-users" };
+
+function tabsForRole(papel) {
+  if (papel === "READONLY") return ["dashboard","issues","especificacao"];
+  if (papel === "EDITOR")   return ["dashboard","issues","especificacao","clientes","criterios"];
+  return ["dashboard","issues","especificacao","clientes","criterios","operadores"]; // ADMIN
+}
 
 export default function App() {
+  const [authLoading, setAuthLoading] = useState(true);
+  const [operador, setOperador]       = useState(null);
+
+  useEffect(() => {
+    const token = localStorage.getItem(TOKEN_KEY)
+    if (!token) { setAuthLoading(false); return }
+    apiFetch(API + '/auth/me')
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(op => setOperador(op))
+      .catch(() => localStorage.removeItem(TOKEN_KEY))
+      .finally(() => setAuthLoading(false))
+  }, [])
+
+  function handleLogout() {
+    localStorage.removeItem(TOKEN_KEY)
+    setOperador(null)
+  }
+
+  if (authLoading) return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'100vh', fontFamily:'system-ui,sans-serif', gap:12 }}>
+      <i className="ti ti-loader-2" style={{ fontSize:28, color:'var(--color-text-secondary)', animation:'spin 1s linear infinite' }} />
+    </div>
+  )
+  if (!operador) return <LoginScreen onSuccess={setOperador} />
+  if (operador.deveTrocarSenha) return <ForcePasswordChangeScreen operador={operador} onDone={setOperador} onLogout={handleLogout} />
+
+  return <AuthenticatedApp operador={operador} onLogout={handleLogout} setOperador={setOperador} />
+}
+
+function AuthenticatedApp({ operador, onLogout, setOperador }) {
+  const isAdmin  = operador.papel === "ADMIN";
+  const canEdit  = operador.papel !== "READONLY";
+  const TABS     = useMemo(() => tabsForRole(operador.papel), [operador.papel]);
+
   const [tab, setTab]               = useState("issues");
   const [issuesData, setIssuesData] = useState([]);
   const [clientsData, setClientsData] = useState([]);
@@ -535,19 +666,22 @@ export default function App() {
   const [importModal, setImportModal] = useState(null); // "issue" | "client" | null
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [confirmDelete, setConfirmDelete]         = useState(false);
-  const [senhaDeleteIssues, setSenhaDeleteIssues] = useState(false);
   const [impdConfirm, setImpdConfirm]             = useState(false);
   const [loading, setLoading]            = useState(true);
   const [criteriaData, setCriteriaData]    = useState([]);
   const [segmentosData, setSegmentosData]  = useState([]);
   const [selectedSegmento, setSelectedSegmento] = useState(null); // { id, nome }
+  const [operadoresData, setOperadoresData] = useState([]);
+
+  // Segmentos que este operador pode visualizar/selecionar (todos, se Admin)
+  const mySegmentos = isAdmin ? segmentosData : (operador.segmentos ?? []);
 
   useEffect(() => {
     Promise.all([
-      fetch(API + '/issues'),
-      fetch(API + '/clients'),
-      fetch(API + '/depara'),
-      fetch(API + '/segmentos'),
+      apiFetch(API + '/issues'),
+      apiFetch(API + '/clients'),
+      apiFetch(API + '/depara'),
+      apiFetch(API + '/segmentos'),
     ])
       .then(rs => Promise.all(rs.map(r => r.json())))
       .then(([iss, cl, dp, segs]) => {
@@ -555,19 +689,25 @@ export default function App() {
         setClientsData(cl.map(apiClientToApp))
         setDeparaData(dp.map(d => ({ c: d.nomeCliente, i: d.nomeClienteIssue })))
         setSegmentosData(segs)
-        // Seleciona o primeiro segmento que tiver critérios, ou o primeiro da lista
-        if (segs.length) setSelectedSegmento(segs[0])
+        // Seleciona o primeiro segmento disponível para este operador
+        const options = isAdmin ? segs : (operador.segmentos ?? [])
+        if (options.length) setSelectedSegmento(options[0])
       })
       .catch(e => console.error('Erro ao carregar dados:', e))
       .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    if (!isAdmin) return
+    apiFetch(API + '/operadores').then(r => r.json()).then(setOperadoresData).catch(() => {})
+  }, [isAdmin])
 
   // Carrega critérios do segmento selecionado (ou todos quando nenhum segmento está ativo)
   useEffect(() => {
     const url = selectedSegmento
       ? API + '/criterios?segmentoId=' + selectedSegmento.id
       : API + '/criterios'
-    fetch(url)
+    apiFetch(url)
       .then(r => r.json())
       .then(crit => setCriteriaData(crit))
       .catch(e => console.error('Erro ao carregar critérios:', e))
@@ -622,17 +762,17 @@ export default function App() {
 
   async function handleAddIssues(issues) {
     await Promise.allSettled(
-      issues.map(i => fetch(API + "/issues", {
+      issues.map(i => apiFetch(API + "/issues", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...appIssueToApi(i), segmentoId: selectedSegmento?.id }),
       }))
     )
-    const fresh = await fetch(API + '/issues').then(r => r.json())
+    const fresh = await apiFetch(API + '/issues').then(r => r.json())
     setIssuesData(fresh.map(apiIssueToApp))
   }
   async function handleAddClients(clients) {
     await Promise.allSettled(
-      clients.map(c => fetch(API + "/clients", {
+      clients.map(c => apiFetch(API + "/clients", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(appClientToApi(c)),
       }))
@@ -649,7 +789,7 @@ export default function App() {
   }
 
   async function handleSaveFatSeg(clienteId, segmentoId, valor) {
-    const res = await fetch(API + "/faturamento-segmentos", {
+    const res = await apiFetch(API + "/faturamento-segmentos", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ clienteId: Number(clienteId), segmentoId: Number(segmentoId), valor: Number(valor) }),
     });
@@ -664,7 +804,7 @@ export default function App() {
   }
 
   async function handleDeleteFatSeg(fatSegId, clienteId, segmentoId) {
-    await fetch(API + "/faturamento-segmentos/" + fatSegId, { method: "DELETE" });
+    await apiFetch(API + "/faturamento-segmentos/" + fatSegId, { method: "DELETE" });
     setClientsData(prev => prev.map(c => {
       if (c.id !== clienteId) return c;
       return { ...c, fatSegs: (c.fatSegs ?? []).filter(fs => fs.id !== fatSegId) };
@@ -689,27 +829,27 @@ export default function App() {
   }
   async function handleDeleteSelected() {
     await Promise.allSettled(
-      [...selectedIds].map(id => fetch(API + "/issues/" + id, { method: "DELETE" }))
+      [...selectedIds].map(id => apiFetch(API + "/issues/" + id, { method: "DELETE" }))
     )
     setIssuesData(prev => prev.filter(x => !selectedIds.has(x.id)));
     setSelectedIds(new Set());
     setConfirmDelete(false);
   }
   async function handleSetImpeditiva(ids, impeditiva) {
-    await fetch(API + '/issues/bulk-impeditiva', {
+    await apiFetch(API + '/issues/bulk-impeditiva', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids: [...ids], impeditiva }),
     });
     setIssuesData(prev => prev.map(x => ids.has(x.id) ? { ...x, imp: impeditiva ? 1 : 0 } : x));
     setSelectedIds(new Set());
-    fetch(API + '/clients').then(r => r.json()).then(cl => setClientsData(cl.map(apiClientToApp))).catch(() => {});
+    apiFetch(API + '/clients').then(r => r.json()).then(cl => setClientsData(cl.map(apiClientToApp))).catch(() => {});
   }
 
   async function handleToggleCriterio(id) {
     const crit = criteriaData.find(c => c.id === id);
     const updated = { ...crit, ativo: !crit.ativo };
     setCriteriaData(prev => prev.map(c => c.id === id ? updated : c));
-    await fetch(API + "/criterios/" + id, {
+    await apiFetch(API + "/criterios/" + id, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ativo: updated.ativo }),
     });
@@ -722,7 +862,7 @@ export default function App() {
       ativo: true, padrao: false,
       segmentoId: selectedSegmento?.id,
     };
-    const res  = await fetch(API + "/criterios", {
+    const res  = await apiFetch(API + "/criterios", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -730,7 +870,7 @@ export default function App() {
     setCriteriaData(prev => [...prev, saved]);
   }
   async function handleDeleteCriterio(id) {
-    await fetch(API + "/criterios/" + id, { method: "DELETE" });
+    await apiFetch(API + "/criterios/" + id, { method: "DELETE" });
     setCriteriaData(prev => prev.filter(c => c.id !== id));
   }
   async function handleReorderCriterio(id, direction) {
@@ -747,11 +887,35 @@ export default function App() {
       return u ? { ...c, peso: u.peso } : c;
     }));
     await Promise.all(updates.map(u =>
-      fetch(API + "/criterios/" + u.id, {
+      apiFetch(API + "/criterios/" + u.id, {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ peso: u.peso }),
       })
     ));
+  }
+
+  async function handleCreateOperador(data) {
+    const res = await apiFetch(API + "/operadores", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    const saved = await res.json();
+    if (!res.ok) throw new Error(saved.error || "Não foi possível criar o operador.");
+    setOperadoresData(prev => [...prev, saved].sort((a,b) => a.nome.localeCompare(b.nome, "pt-BR")));
+  }
+  async function handleUpdateOperador(id, data) {
+    const res = await apiFetch(API + "/operadores/" + id, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    const saved = await res.json();
+    if (!res.ok) throw new Error(saved.error || "Não foi possível salvar o operador.");
+    setOperadoresData(prev => prev.map(o => o.id === id ? saved : o));
+    if (saved.id === operador.id) setOperador(saved);
+  }
+  async function handleDeactivateOperador(id) {
+    await apiFetch(API + "/operadores/" + id, { method: "DELETE" });
+    setOperadoresData(prev => prev.map(o => o.id === id ? { ...o, ativo:false } : o));
   }
 
   const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.segmento.length || filters.aprovacao.length || filters.search;
@@ -775,27 +939,27 @@ export default function App() {
               <div style={{ fontWeight:500, fontSize:15, lineHeight:1.2 }}>Teknisa Prioritizer</div>
               <div style={{ fontSize:11, color:"var(--color-text-secondary)" }}>Teknisa · Priorização de Issues</div>
             </div>
-            {segmentosData.length > 0 && (
+            {mySegmentos.length > 0 && (
               <div style={{ marginLeft:12, display:"flex", alignItems:"center", gap:6 }}>
                 <i className="ti ti-building-community" style={{ fontSize:13, color:"var(--color-text-tertiary)" }} />
                 <select
                   value={selectedSegmento?.id ?? ""}
                   onChange={e => {
-                    const seg = e.target.value ? segmentosData.find(s => s.id === Number(e.target.value)) : null;
-                    setSelectedSegmento(seg ?? null);
+                    const seg = e.target.value ? mySegmentos.find(s => s.id === Number(e.target.value)) : null;
+                    setSelectedSegmento(seg ?? (isAdmin ? null : mySegmentos[0]));
                   }}
                   style={{ fontSize:13, fontWeight:500, border:"0.5px solid var(--color-border-secondary)", borderRadius:6, padding:"4px 8px", background:"var(--color-background-secondary)", color:"var(--color-text-primary)", cursor:"pointer" }}
                 >
-                  <option value="">Todos os segmentos</option>
-                  {segmentosData.map(s => (
+                  {isAdmin && <option value="">Todos os segmentos</option>}
+                  {mySegmentos.map(s => (
                     <option key={s.id} value={s.id}>{s.nome}</option>
                   ))}
                 </select>
               </div>
             )}
           </div>
-          <div style={{ display:"flex", gap:8 }}>
-            {selectedIds.size > 0 && (<>
+          <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+            {canEdit && selectedIds.size > 0 && (<>
               <button onClick={() => setImpdConfirm(true)} style={{ fontSize:12, padding:"6px 14px", display:"flex", alignItems:"center", gap:6, background:"#FFF7ED", color:"#92400E", border:"0.5px solid #FCD34D88" }}>
                 <i className="ti ti-ban" style={{ fontSize:14 }} aria-hidden /> Impeditiva ({selectedIds.size})
               </button>
@@ -803,12 +967,25 @@ export default function App() {
                 <i className="ti ti-trash" style={{ fontSize:14 }} aria-hidden /> Excluir {selectedIds.size} issue{selectedIds.size > 1 ? "s" : ""}
               </button>
             </>)}
-            <button onClick={() => setImportModal("issue")} style={{ fontSize:12, padding:"6px 14px", display:"flex", alignItems:"center", gap:6 }}>
-              <i className="ti ti-table-import" style={{ fontSize:14 }} aria-hidden /> + Issues
-            </button>
-            <button onClick={() => setImportModal("client")} style={{ fontSize:12, padding:"6px 14px", display:"flex", alignItems:"center", gap:6 }}>
-              <i className="ti ti-users-plus" style={{ fontSize:14 }} aria-hidden /> + Clientes
-            </button>
+            {canEdit && (
+              <button onClick={() => setImportModal("issue")} style={{ fontSize:12, padding:"6px 14px", display:"flex", alignItems:"center", gap:6 }}>
+                <i className="ti ti-table-import" style={{ fontSize:14 }} aria-hidden /> + Issues
+              </button>
+            )}
+            {canEdit && (
+              <button onClick={() => setImportModal("client")} style={{ fontSize:12, padding:"6px 14px", display:"flex", alignItems:"center", gap:6 }}>
+                <i className="ti ti-users-plus" style={{ fontSize:14 }} aria-hidden /> + Clientes
+              </button>
+            )}
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginLeft:4, paddingLeft:12, borderLeft:"0.5px solid var(--color-border-tertiary)" }}>
+              <div style={{ textAlign:"right", lineHeight:1.2 }}>
+                <div style={{ fontSize:12, fontWeight:500 }}>{operador.nome}</div>
+                <div style={{ fontSize:10, color:"var(--color-text-tertiary)" }}>{PAPEL_LABELS[operador.papel]}</div>
+              </div>
+              <button onClick={onLogout} title="Sair" style={{ fontSize:12, padding:"6px 10px", display:"flex", alignItems:"center", gap:6 }}>
+                <i className="ti ti-logout" style={{ fontSize:14 }} aria-hidden />
+              </button>
+            </div>
           </div>
         </div>
         <div style={{ display:"flex", gap:0 }}>
@@ -830,13 +1007,12 @@ export default function App() {
       </div>
 
       <div style={{ padding:"24px", maxWidth:1280, margin:"0 auto" }}>
-        {tab==="dashboard"    && <DashboardTab stats={stats} issues={sorted} enriched={segmentEnriched} criteriaData={criteriaData} segmento={selectedSegmento} />}
-        {(() => { const rs = selectedSegmento?.nome === "HCM"; return (<>
-        {tab==="issues"       && <IssuesTab issues={filteredIssues} allIssues={sorted} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={selectedIds} toggleSelect={toggleSelect} toggleSelectAll={toggleSelectAll} onEditSave={handleAddIssues} requireSenha={rs} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
-        {tab==="especificacao"&& <IssuesTab issues={filteredEspec}  allIssues={sorted.filter(x=>x.st==="Especificação")} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={selectedIds} toggleSelect={toggleSelect} toggleSelectAll={toggleSelectAll} especMode onEditSave={handleAddIssues} requireSenha={rs} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
-        {tab==="clientes"     && <ClientsTab clients={clientsData} onAddSingle={c => handleAddClients([c])} requireSenha={rs} segmentosData={segmentosData} onSaveFatSeg={handleSaveFatSeg} onDeleteFatSeg={handleDeleteFatSeg} />}
-        {tab==="criterios"    && <CriteriosTab criteriaData={criteriaData} issues={filteredIssues} onToggle={handleToggleCriterio} onSave={handleSaveCriterio} onDelete={handleDeleteCriterio} onReorder={handleReorderCriterio} requireSenha={rs} />}
-        </>); })()}
+        {tab==="dashboard"    && <DashboardTab stats={stats} issues={sorted} enriched={segmentEnriched} criteriaData={criteriaData} segmento={selectedSegmento} isAdmin={isAdmin} />}
+        {tab==="issues"       && <IssuesTab issues={filteredIssues} allIssues={sorted} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={canEdit ? selectedIds : undefined} toggleSelect={canEdit ? toggleSelect : undefined} toggleSelectAll={canEdit ? toggleSelectAll : undefined} onEditSave={handleAddIssues} canEdit={canEdit} isAdmin={isAdmin} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
+        {tab==="especificacao"&& <IssuesTab issues={filteredEspec}  allIssues={sorted.filter(x=>x.st==="Especificação")} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={canEdit ? selectedIds : undefined} toggleSelect={canEdit ? toggleSelect : undefined} toggleSelectAll={canEdit ? toggleSelectAll : undefined} especMode onEditSave={handleAddIssues} canEdit={canEdit} isAdmin={isAdmin} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
+        {tab==="clientes"     && <ClientsTab clients={clientsData} onAddSingle={c => handleAddClients([c])} isAdmin={isAdmin} segmentosData={segmentosData} onSaveFatSeg={handleSaveFatSeg} onDeleteFatSeg={handleDeleteFatSeg} />}
+        {tab==="criterios"    && <CriteriosTab criteriaData={criteriaData} issues={filteredIssues} onToggle={handleToggleCriterio} onSave={handleSaveCriterio} onDelete={handleDeleteCriterio} onReorder={handleReorderCriterio} />}
+        {tab==="operadores"   && <OperadoresTab operadores={operadoresData} segmentosData={segmentosData} currentOperadorId={operador.id} onCreate={handleCreateOperador} onUpdate={handleUpdateOperador} onDeactivate={handleDeactivateOperador} />}
       </div>
 
       {confirmDelete && (
@@ -851,20 +1027,12 @@ export default function App() {
             </div>
             <div style={{ display:"flex", gap:8, justifyContent:"center" }}>
               <button onClick={() => setConfirmDelete(false)} style={{ padding:"8px 20px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)", cursor:"pointer", fontSize:13, fontWeight:500 }}>Cancelar</button>
-              <button onClick={() => { setConfirmDelete(false); selectedSegmento?.nome === "HCM" ? setSenhaDeleteIssues(true) : handleDeleteSelected(); }} style={{ padding:"8px 20px", borderRadius:8, border:"none", background:"#A32D2D", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:500 }}>
+              <button onClick={() => { setConfirmDelete(false); handleDeleteSelected(); }} style={{ padding:"8px 20px", borderRadius:8, border:"none", background:"#A32D2D", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:500 }}>
                 Sim, excluir
               </button>
             </div>
           </div>
         </div>
-      )}
-      {senhaDeleteIssues && (
-        <PasswordModal
-          title="Confirmar exclusão"
-          message={`Informe a senha para excluir ${selectedIds.size} issue${selectedIds.size > 1 ? "s" : ""} permanentemente.`}
-          onConfirm={() => { setSenhaDeleteIssues(false); handleDeleteSelected(); }}
-          onClose={() => setSenhaDeleteIssues(false)}
-        />
       )}
       {impdConfirm && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:2000 }}>
@@ -889,13 +1057,13 @@ export default function App() {
         </div>
       )}
       {importModal==="issue"  && <ImportIssueModal  onClose={() => setImportModal(null)} onSave={handleAddIssues}  existingIssues={issuesData} selectedSegmento={selectedSegmento} />}
-      {importModal==="client" && <ImportClientModal onClose={() => setImportModal(null)} onSave={handleAddClients} existingClients={clientsData} />}
+      {importModal==="client" && <ImportClientModal onClose={() => setImportModal(null)} onSave={handleAddClients} existingClients={clientsData} isAdmin={isAdmin} />}
     </div>
   );
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
-function DashboardTab({ stats, issues, enriched, criteriaData, segmento }) {
+function DashboardTab({ stats, issues, enriched, criteriaData, segmento, isAdmin }) {
   const active = issues.filter(x => !isDone(x.st));
   const top    = active.slice(0, 10);
 
@@ -918,7 +1086,7 @@ function DashboardTab({ stats, issues, enriched, criteriaData, segmento }) {
             </span>
           )}
         </div>
-        {items.map((issue, i) => <IssueRow key={issue.id} issue={issue} rank={i + 1} compact criteriaData={criteriaData} />)}
+        {items.map((issue, i) => <IssueRow key={issue.id} issue={issue} rank={i + 1} compact criteriaData={criteriaData} isAdmin={isAdmin} />)}
       </div>
     );
   }
@@ -962,7 +1130,7 @@ function DashboardTab({ stats, issues, enriched, criteriaData, segmento }) {
 }
 
 // ── ISSUE ROW ─────────────────────────────────────────────────────────────────
-function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, criteriaData }) {
+function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, criteriaData, isAdmin }) {
   const [expanded, setExpanded] = useState(false);
   const gs = GROUP_STYLE[issue._sc.group] || GROUP_STYLE[6];
   const cb = curveBadge(issue._curva);
@@ -1019,7 +1187,7 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, criteriaDa
           <Field label="Roadmap"           value={issue.rm ? "Sim" : "Não"} />
           <Field label="Atende +1 cliente" value={issue.mc ? "Sim" : "Não"} />
           <Field label="Valor"             value={issue.val>0 ? `R$ ${issue.val.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />
-          <Field label="Faturamento do cliente" value={issue._client ? `R$ ${(issue._client.fat||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />
+          {isAdmin && <Field label="Faturamento do cliente" value={issue._client ? `R$ ${(issue._client.fat||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />}
           <Field label="Aprovação" value={issue.ap ?? "(Não analisado)"} color={issue.ap==="Não"?"#A32D2D":issue.ap==="Sim"?"#27500A":undefined} />
           {issue.ap==="Não" && issue.mr && <Field label="Motivo da reprovação" value={issue.mr} />}
           <div style={{ gridColumn:"1 / -1" }}>
@@ -1045,11 +1213,10 @@ function Field({ label, value, color }) {
 }
 
 // ── ISSUES TAB ────────────────────────────────────────────────────────────────
-function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDone, issuesData, hasFilters, especMode, selectedIds, toggleSelect, toggleSelectAll, onEditSave, requireSenha, segmentosData, criteriaData, selectedSegmento }) {
+function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDone, issuesData, hasFilters, especMode, selectedIds, toggleSelect, toggleSelectAll, onEditSave, canEdit, isAdmin, segmentosData, criteriaData, selectedSegmento }) {
   function sf(k, v) { setFilters(f => ({...f,[k]:v})); }
   const [issueSort, setIssueSort]         = useState({ field: null, dir: "asc" });
   const [editIssue, setEditIssue]         = useState(null);
-  const [senhaEditIssue, setSenhaEditIssue] = useState(null);
   const [newIssueOpen, setNewIssueOpen]   = useState(false);
   function toggleIssueSort(field) {
     setIssueSort(s => s.field === field ? { field, dir: s.dir === "asc" ? "desc" : "asc" } : { field, dir: "asc" });
@@ -1084,7 +1251,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             <input type="checkbox" checked={showDone} onChange={e => setShowDone(e.target.checked)} />
             Concluídas
           </label>
-          {!especMode && (
+          {!especMode && canEdit && (
             <button
               onClick={() => setNewIssueOpen(true)}
               style={{ padding:"7px 14px", background:"var(--color-blue-600)", color:"#fff", border:"none", borderRadius:8, fontWeight:600, display:"flex", alignItems:"center", gap:5, whiteSpace:"nowrap" }}
@@ -1201,16 +1368,8 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             Nenhuma issue encontrada
           </div>
         )}
-        {displayedIssues.map((issue,i) => <IssueRow key={issue.id} issue={issue} rank={i+1} selected={selectedIds && selectedIds.has(issue.id)} onToggle={toggleSelect} onEdit={onEditSave ? (i => requireSenha ? setSenhaEditIssue(i) : setEditIssue(i)) : undefined} criteriaData={criteriaData} />)}
+        {displayedIssues.map((issue,i) => <IssueRow key={issue.id} issue={issue} rank={i+1} selected={selectedIds && selectedIds.has(issue.id)} onToggle={toggleSelect} onEdit={onEditSave && canEdit ? (i => setEditIssue(i)) : undefined} criteriaData={criteriaData} isAdmin={isAdmin} />)}
       </div>
-      {senhaEditIssue && (
-        <PasswordModal
-          title="Editar issue"
-          message={`Informe a senha para editar a issue #${senhaEditIssue.id}.`}
-          onConfirm={() => { setEditIssue(senhaEditIssue); setSenhaEditIssue(null); }}
-          onClose={() => setSenhaEditIssue(null)}
-        />
-      )}
       {editIssue && (
         <EditIssueModal
           issue={editIssue}
@@ -1245,12 +1404,14 @@ function FilterTag({ label, onRemove }) {
 }
 
 // ── CLIENTS TAB ───────────────────────────────────────────────────────────────
-function ClientsTab({ clients, onAddSingle, requireSenha, segmentosData, onSaveFatSeg, onDeleteFatSeg }) {
+function ClientsTab({ clients, onAddSingle, isAdmin, segmentosData, onSaveFatSeg, onDeleteFatSeg }) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editClient, setEditClient]       = useState(null);
-  const [senhaEditClient, setSenhaEditClient] = useState(null);
-  const [sort, setSort] = useState({ field:"fat", dir:"desc" });
+  const [sort, setSort] = useState({ field: isAdmin ? "fat" : "n", dir: isAdmin ? "desc" : "asc" });
+  const gridCols = isAdmin
+    ? "2fr 0.8fr 1fr 1.2fr 1fr 1fr 1fr 1fr 36px"
+    : "2fr 0.8fr 1fr 1fr 1fr 1fr 1fr 36px";
   const filtered = clients.filter(c => !search || normName(c.n).includes(normName(search)));
   const sorted = [...filtered].sort((a, b) => {
     const mul = sort.dir === "asc" ? 1 : -1;
@@ -1279,23 +1440,23 @@ function ClientsTab({ clients, onAddSingle, requireSenha, segmentosData, onSaveF
         </button>
       </div>
       <div style={{ background:"var(--color-background-primary)", borderRadius:12, border:"0.5px solid var(--color-border-tertiary)", overflow:"hidden" }}>
-        <div style={{ padding:"10px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"grid", gridTemplateColumns:"2fr 0.8fr 1fr 1.2fr 1fr 1fr 1fr 1fr 36px", gap:8, fontSize:11, color:"var(--color-text-tertiary)", fontWeight:500 }}>
-          {th("Cliente","n")}{th("Código","codigo")}{th("Curva","cv")}{th("Faturamento","fat")}{th("Tipo","tp")}{th("Churn","ch")}{th("Projeto","pr")}{th("Impeditivas","im")}<span />
+        <div style={{ padding:"10px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"grid", gridTemplateColumns:gridCols, gap:8, fontSize:11, color:"var(--color-text-tertiary)", fontWeight:500 }}>
+          {th("Cliente","n")}{th("Código","codigo")}{th("Curva","cv")}{isAdmin && th("Faturamento","fat")}{th("Tipo","tp")}{th("Churn","ch")}{th("Projeto","pr")}{th("Impeditivas","im")}<span />
         </div>
         {sorted.map(c => {
           const cb = curveBadge(c.cv);
           return (
-            <div key={c.n+c.fat} style={{ padding:"10px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"grid", gridTemplateColumns:"2fr 0.8fr 1fr 1.2fr 1fr 1fr 1fr 1fr 36px", gap:8, alignItems:"center" }}>
+            <div key={c.id} style={{ padding:"10px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"grid", gridTemplateColumns:gridCols, gap:8, alignItems:"center" }}>
               <span style={{ fontSize:13, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.n}</span>
               <span style={{ fontSize:12, color:"var(--color-text-secondary)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.codigo || "—"}</span>
               <span style={{ background:cb.bg, color:cb.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, textAlign:"center", border:`0.5px solid ${cb.border}44` }}>Curva {c.cv}</span>
-              <span style={{ fontSize:12 }}>R$ {(c.fat||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+              {isAdmin && <span style={{ fontSize:12 }}>R$ {(c.fat||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>}
               <span style={{ fontSize:12, color:"var(--color-text-secondary)" }}>{c.tp}</span>
               <span>{c.ch ? <span style={{ color:"#E24B4A",fontSize:12 }}>Sim</span> : <span style={{ color:"var(--color-text-tertiary)",fontSize:12 }}>Não</span>}</span>
               <span>{c.pr ? <span style={{ color:"#185FA5",fontSize:12 }}>Sim</span> : <span style={{ color:"var(--color-text-tertiary)",fontSize:12 }}>Não</span>}</span>
               <span style={{ fontSize:12, textAlign:"center" }}>{c.im}</span>
               <button
-                onClick={() => { const d = { id:c.id, n:c.n, ac:c.ac??"", fat:(c.fat??0).toFixed(2), tp:c.tp??"REAL", cv:c.cv??"B", ch:String(c.ch??0), pr:String(c.pr??0), codigo:c.codigo??"", fatSegs:c.fatSegs??[] }; requireSenha ? setSenhaEditClient(d) : setEditClient(d); }}
+                onClick={() => { const d = { id:c.id, n:c.n, ac:c.ac??"", fat:(c.fat??0).toFixed(2), tp:c.tp??"REAL", cv:c.cv??"B", ch:String(c.ch??0), pr:String(c.pr??0), codigo:c.codigo??"", fatSegs:c.fatSegs??[] }; setEditClient(d); }}
                 title="Editar cliente"
                 style={{ padding:"3px 6px", borderRadius:6, border:"0.5px solid var(--color-border-secondary)", background:"transparent", cursor:"pointer", color:"var(--color-text-tertiary)", display:"flex", alignItems:"center", justifyContent:"center" }}
               >
@@ -1305,27 +1466,17 @@ function ClientsTab({ clients, onAddSingle, requireSenha, segmentosData, onSaveF
           );
         })}
       </div>
-      {showForm   && <SingleClientModal onClose={() => setShowForm(false)}  onSave={c => { onAddSingle(c); setShowForm(false); }} segmentosData={segmentosData} onSaveFatSeg={onSaveFatSeg} onDeleteFatSeg={onDeleteFatSeg} />}
-      {senhaEditClient && (
-        <PasswordModal
-          title="Editar cliente"
-          message={`Informe a senha para editar o cliente "${senhaEditClient.n}".`}
-          onConfirm={() => { setEditClient(senhaEditClient); setSenhaEditClient(null); }}
-          onClose={() => setSenhaEditClient(null)}
-        />
-      )}
-      {editClient && <SingleClientModal onClose={() => setEditClient(null)} onSave={c => { onAddSingle(c); setEditClient(null); }} initialData={editClient} segmentosData={segmentosData} onSaveFatSeg={onSaveFatSeg} onDeleteFatSeg={onDeleteFatSeg} />}
+      {showForm   && <SingleClientModal onClose={() => setShowForm(false)}  onSave={c => { onAddSingle(c); setShowForm(false); }} isAdmin={isAdmin} segmentosData={segmentosData} onSaveFatSeg={onSaveFatSeg} onDeleteFatSeg={onDeleteFatSeg} />}
+      {editClient && <SingleClientModal onClose={() => setEditClient(null)} onSave={c => { onAddSingle(c); setEditClient(null); }} initialData={editClient} isAdmin={isAdmin} segmentosData={segmentosData} onSaveFatSeg={onSaveFatSeg} onDeleteFatSeg={onDeleteFatSeg} />}
     </div>
   );
 }
 
 // ── CRITERIOS TAB ─────────────────────────────────────────────────────────────
-function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReorder, requireSenha }) {
+function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReorder }) {
   const [showForm, setShowForm]           = useState(false);
   const [form, setForm]                   = useState({ nome:"", peso:"", tipo:"issue", atributo:"isErro", valor:"", direcao:"desc" });
   const [delId, setDelId]                 = useState(null);
-  const [senhaInativar, setSenhaInativar] = useState(null); // id do critério a inativar
-  const [senhaExcluir, setSenhaExcluir]   = useState(null); // id do critério a excluir
 
   const ATRS_BY_TIPO = {
     issue:   ATRIBUTOS_DISPONIVEIS.filter(a => a.tipo === "issue"),
@@ -1455,7 +1606,7 @@ function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReor
               <span style={{ fontSize:11, color:"var(--color-text-tertiary)", minWidth:20, textAlign:"center", fontWeight:500 }}>{idx + 1}</span>
               <label style={{ display:"flex", alignItems:"center", cursor:"pointer", flexShrink:0 }}>
                 <input
-                  type="checkbox" checked={c.ativo} onChange={() => c.ativo ? (requireSenha ? setSenhaInativar(c.id) : onToggle(c.id)) : onToggle(c.id)}
+                  type="checkbox" checked={c.ativo} onChange={() => onToggle(c.id)}
                   style={{ width:16, height:16, accentColor:"#185FA5", cursor:"pointer" }}
                 />
               </label>
@@ -1545,30 +1696,194 @@ function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReor
             </div>
             <div style={{ display:"flex", gap:8, justifyContent:"center" }}>
               <button onClick={() => setDelId(null)} style={{ padding:"8px 20px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)", cursor:"pointer", fontSize:13, fontWeight:500 }}>Cancelar</button>
-              <button onClick={() => { if (requireSenha) { setSenhaExcluir(delId); setDelId(null); } else { onDelete(delId); setDelId(null); } }} style={{ padding:"8px 20px", borderRadius:8, border:"none", background:"#A32D2D", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:500 }}>Excluir</button>
+              <button onClick={() => { onDelete(delId); setDelId(null); }} style={{ padding:"8px 20px", borderRadius:8, border:"none", background:"#A32D2D", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:500 }}>Excluir</button>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
 
-      {senhaInativar !== null && (
-        <PasswordModal
-          title="Inativar critério"
-          message="Informe a senha para desativar este critério."
-          onConfirm={() => { onToggle(senhaInativar); setSenhaInativar(null); }}
-          onClose={() => setSenhaInativar(null)}
+// ── OPERADORES TAB ────────────────────────────────────────────────────────────
+function OperadoresTab({ operadores, segmentosData, currentOperadorId, onCreate, onUpdate, onDeactivate }) {
+  const [showForm, setShowForm]   = useState(false);
+  const [editOperador, setEditOperador] = useState(null);
+  const [delOperador, setDelOperador]   = useState(null);
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+        <div>
+          <div style={{ fontWeight:500, fontSize:16 }}>Operadores</div>
+          <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginTop:2 }}>
+            Cadastre operadores e defina seu papel e segmentos de acesso.
+          </div>
+        </div>
+        <button onClick={() => setShowForm(true)} style={{ padding:"7px 14px", background:"var(--color-blue-600)", color:"#fff", border:"none", borderRadius:8, fontWeight:600, display:"flex", alignItems:"center", gap:5, whiteSpace:"nowrap" }}>
+          <i className="ti ti-plus" style={{ fontSize:14 }} aria-hidden /> Novo Operador
+        </button>
+      </div>
+
+      <div style={{ background:"var(--color-background-primary)", borderRadius:12, border:"0.5px solid var(--color-border-tertiary)", overflow:"hidden" }}>
+        <div style={{ padding:"10px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"grid", gridTemplateColumns:"1.6fr 1.8fr 1fr 1.6fr 0.8fr 36px", gap:8, fontSize:11, color:"var(--color-text-tertiary)", fontWeight:500 }}>
+          <span>Nome</span><span>E-mail</span><span>Papel</span><span>Segmentos</span><span>Status</span><span />
+        </div>
+        {operadores.map(o => (
+          <div key={o.id} style={{ padding:"10px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"grid", gridTemplateColumns:"1.6fr 1.8fr 1fr 1.6fr 0.8fr 36px", gap:8, alignItems:"center", opacity: o.ativo ? 1 : 0.5 }}>
+            <span style={{ fontSize:13, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+              {o.nome}{o.id === currentOperadorId && <span style={{ marginLeft:6, fontSize:11, color:"var(--color-text-tertiary)" }}>(você)</span>}
+            </span>
+            <span style={{ fontSize:12, color:"var(--color-text-secondary)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{o.email}</span>
+            <span style={{ fontSize:11, fontWeight:500, background:"var(--color-background-secondary)", borderRadius:4, padding:"2px 6px", textAlign:"center" }}>{PAPEL_LABELS[o.papel]}</span>
+            <span style={{ fontSize:12, color:"var(--color-text-secondary)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+              {o.papel === "ADMIN" ? "Todos" : (o.segmentos?.map(s => s.nome).join(", ") || "—")}
+            </span>
+            <span style={{ fontSize:12 }}>{o.ativo ? <span style={{ color:"#27500A" }}>Ativo</span> : <span style={{ color:"var(--color-text-tertiary)" }}>Inativo</span>}</span>
+            <button
+              onClick={() => setEditOperador(o)}
+              title="Editar operador"
+              style={{ padding:"3px 6px", borderRadius:6, border:"0.5px solid var(--color-border-secondary)", background:"transparent", cursor:"pointer", color:"var(--color-text-tertiary)", display:"flex", alignItems:"center", justifyContent:"center" }}
+            >
+              <i className="ti ti-pencil" style={{ fontSize:13 }} />
+            </button>
+          </div>
+        ))}
+        {operadores.length === 0 && (
+          <div style={{ textAlign:"center", padding:"32px 0", color:"var(--color-text-tertiary)", fontSize:13 }}>Nenhum operador cadastrado ainda.</div>
+        )}
+      </div>
+
+      {showForm && (
+        <OperadorFormModal
+          segmentosData={segmentosData}
+          onClose={() => setShowForm(false)}
+          onSubmit={async data => { await onCreate(data); setShowForm(false); }}
         />
       )}
-
-      {senhaExcluir !== null && (
-        <PasswordModal
-          title="Confirmar exclusão"
-          message="Informe a senha para excluir este critério permanentemente."
-          onConfirm={() => { onDelete(senhaExcluir); setSenhaExcluir(null); }}
-          onClose={() => setSenhaExcluir(null)}
+      {editOperador && (
+        <OperadorFormModal
+          initialData={editOperador}
+          segmentosData={segmentosData}
+          onClose={() => setEditOperador(null)}
+          onSubmit={async data => { await onUpdate(editOperador.id, data); setEditOperador(null); }}
+          onDeactivate={editOperador.ativo && editOperador.id !== currentOperadorId ? () => setDelOperador(editOperador) : undefined}
         />
+      )}
+      {delOperador && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:2000 }}>
+          <div style={{ background:"var(--color-background-primary)", borderRadius:16, border:"0.5px solid var(--color-border-tertiary)", padding:28, width:380, textAlign:"center" }}>
+            <div style={{ width:48, height:48, borderRadius:12, background:"#FCEBEB", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px" }}>
+              <i className="ti ti-user-off" style={{ fontSize:24, color:"#A32D2D" }} />
+            </div>
+            <div style={{ fontWeight:500, fontSize:16, marginBottom:8 }}>Inativar operador?</div>
+            <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:24 }}>
+              <strong>{delOperador.nome}</strong> perderá o acesso ao sistema imediatamente. Você pode reativá-lo depois editando o cadastro.
+            </div>
+            <div style={{ display:"flex", gap:8, justifyContent:"center" }}>
+              <button onClick={() => setDelOperador(null)} style={{ padding:"8px 20px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)", cursor:"pointer", fontSize:13, fontWeight:500 }}>Cancelar</button>
+              <button onClick={() => { onDeactivate(delOperador.id); setDelOperador(null); setEditOperador(null); }} style={{ padding:"8px 20px", borderRadius:8, border:"none", background:"#A32D2D", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:500 }}>Inativar</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
+  );
+}
+
+function OperadorFormModal({ onClose, onSubmit, initialData, segmentosData, onDeactivate }) {
+  const isEdit = !!initialData?.id;
+  const [nome, setNome]     = useState(initialData?.nome ?? "");
+  const [email, setEmail]   = useState(initialData?.email ?? "");
+  const [papel, setPapel]   = useState(initialData?.papel ?? "READONLY");
+  const [senha, setSenha]   = useState("");
+  const [ativo, setAtivo]   = useState(initialData?.ativo ?? true);
+  const [segmentoIds, setSegmentoIds] = useState(new Set((initialData?.segmentos ?? []).map(s => s.id)));
+  const [error, setError]   = useState("");
+  const [saving, setSaving] = useState(false);
+
+  function toggleSegmento(id) {
+    setSegmentoIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleSave() {
+    setError("");
+    if (!nome.trim() || !email.trim()) return setError("Nome e e-mail são obrigatórios.");
+    if (!isEdit && !senha.trim()) return setError("Defina uma senha inicial para o operador.");
+    if (papel !== "ADMIN" && segmentoIds.size === 0) return setError("Selecione ao menos um segmento para este papel.");
+
+    const data = isEdit
+      ? { nome, email, papel, ativo, segmentoIds: [...segmentoIds], ...(senha.trim() ? { novaSenha: senha } : {}) }
+      : { nome, email, papel, senha, segmentoIds: [...segmentoIds] };
+
+    setSaving(true);
+    try {
+      await onSubmit(data);
+    } catch (e) {
+      setError(e.message || "Não foi possível salvar o operador.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title={isEdit ? `Editar Operador — ${initialData.nome}` : "Novo Operador"} onClose={onClose} onSave={handleSave} saveLabel={saving ? "Salvando..." : "Salvar"}>
+      <FInput label="Nome *" value={nome} onChange={setNome} />
+      <FRow>
+        <FInput label="E-mail *" value={email} onChange={setEmail} type="email" />
+        <FInput
+          label="Papel *" value={papel} onChange={setPapel} select
+          options={[{value:"ADMIN",label:"Administrador"},{value:"EDITOR",label:"Editor"},{value:"READONLY",label:"Somente Leitura"}]}
+        />
+      </FRow>
+      <FInput
+        label={isEdit ? "Redefinir senha (opcional)" : "Senha inicial *"}
+        value={senha} onChange={setSenha} type="password"
+      />
+      {isEdit && senha.trim() && (
+        <div style={{ fontSize:11, color:"var(--color-text-tertiary)", marginTop:-6, marginBottom:12 }}>
+          O operador será obrigado a trocar a senha no próximo acesso.
+        </div>
+      )}
+      {isEdit && (
+        <FInput
+          label="Status" value={ativo ? "1" : "0"} onChange={v => setAtivo(v === "1")} select
+          options={[{value:"1",label:"Ativo"},{value:"0",label:"Inativo"}]}
+        />
+      )}
+      {papel !== "ADMIN" && (
+        <div style={{ marginTop:12 }}>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:6 }}>Segmentos com acesso *</div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+            {segmentosData.map(s => {
+              const checked = segmentoIds.has(s.id);
+              return (
+                <label key={s.id} onClick={() => toggleSegmento(s.id)} style={{
+                  display:"flex", alignItems:"center", gap:5, cursor:"pointer", fontSize:12,
+                  padding:"4px 10px", borderRadius:20,
+                  border: `0.5px solid ${checked ? "#185FA5" : "var(--color-border-secondary)"}`,
+                  background: checked ? "#EFF6FF" : "transparent",
+                  color: checked ? "#185FA5" : "var(--color-text-secondary)",
+                }}>
+                  {s.nome}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {error && <div style={{ fontSize:12, color:"#A32D2D", marginTop:12 }}>{error}</div>}
+      {onDeactivate && (
+        <div style={{ marginTop:20, paddingTop:16, borderTop:"0.5px solid var(--color-border-tertiary)" }}>
+          <button type="button" onClick={onDeactivate} style={{ fontSize:12, padding:"6px 14px", display:"flex", alignItems:"center", gap:6, background:"#FCEBEB", color:"#A32D2D", border:"0.5px solid #E24B4A66" }}>
+            <i className="ti ti-user-off" style={{ fontSize:13 }} aria-hidden /> Inativar operador
+          </button>
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -1640,12 +1955,12 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
 
   useEffect(() => {
-    fetch(API + '/produtos').then(r => r.json()).then(setProdutos).catch(() => {})
+    apiFetch(API + '/produtos').then(r => r.json()).then(setProdutos).catch(() => {})
   }, []);
 
   async function handleAddProd(nome) {
     if (!selectedSegmento?.id) { setError("Selecione um segmento antes de criar um produto."); return; }
-    const res = await fetch(API + '/produtos', {
+    const res = await apiFetch(API + '/produtos', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ nome, segmentoId: selectedSegmento.id }),
     });
@@ -1865,7 +2180,7 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
 }
 
 // ── MODAL IMPORTAR CLIENTES ───────────────────────────────────────────────────
-function ImportClientModal({ onClose, onSave, existingClients }) {
+function ImportClientModal({ onClose, onSave, existingClients, isAdmin }) {
   const [tab, setTab]         = useState("file");
   const [file, setFile]       = useState(null);
   const [preview, setPreview] = useState([]);
@@ -2030,9 +2345,11 @@ function ImportClientModal({ onClose, onSave, existingClients }) {
             <FInput label="Código do Cliente" value={form.codigo} onChange={v=>set("codigo",v)} />
             <FInput label="Data Aceite" value={form.ac} onChange={v=>set("ac",v)} type="date" />
           </FRow>
-          <FRow>
-            <FInput label="Faturamento Mensal (R$)" value={form.fat} onChange={v=>set("fat",v)} type="number" step="0.01" />
-          </FRow>
+          {isAdmin && (
+            <FRow>
+              <FInput label="Faturamento Mensal (R$)" value={form.fat} onChange={v=>set("fat",v)} type="number" step="0.01" />
+            </FRow>
+          )}
           <FRow>
             <FInput label="Curva" value={form.cv} onChange={v=>set("cv",v)} select options={["S","A","B","C","D"]} />
             <FInput label="Tipo" value={form.tp} onChange={v=>set("tp",v)} select options={["REAL","PROJETO"]} />
@@ -2065,12 +2382,12 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
   const exists = form.id ? existingIssues.find(x => x.id === Number(form.id)) : null;
 
   useEffect(() => {
-    fetch(API + '/produtos').then(r => r.json()).then(setProdutos).catch(() => {})
+    apiFetch(API + '/produtos').then(r => r.json()).then(setProdutos).catch(() => {})
   }, []);
 
   async function handleAddProd(nome) {
     if (!selectedSegmento?.id) { alert("Selecione um segmento antes de criar um produto."); return; }
-    const res = await fetch(API + '/produtos', {
+    const res = await apiFetch(API + '/produtos', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ nome, segmentoId: selectedSegmento.id }),
     });
@@ -2183,7 +2500,7 @@ function FatSegRow({ segNome, initialValue, fatSegId, clienteId, segmentoId, onS
 }
 
 // Cadastro rápido de cliente único (botão na aba Clientes)
-function SingleClientModal({ onClose, onSave, initialData, segmentosData, onSaveFatSeg, onDeleteFatSeg }) {
+function SingleClientModal({ onClose, onSave, initialData, isAdmin, segmentosData, onSaveFatSeg, onDeleteFatSeg }) {
   const [form, setForm] = useState(initialData ?? { n:"", ac:"", fat:"0.00", tp:"REAL", cv:"B", ch:"0", pr:"0", codigo:"", fatSegs:[] });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
   function handleSave() {
@@ -2197,10 +2514,10 @@ function SingleClientModal({ onClose, onSave, initialData, segmentosData, onSave
     <Modal title={initialData ? `Editar Cliente — ${initialData.n}` : "Cadastrar / Atualizar Cliente"} onClose={onClose} onSave={handleSave}>
       <FInput label="Nome do Cliente *" value={form.n} onChange={v=>set("n",v)} />
       <FRow><FInput label="Código do Cliente" value={form.codigo} onChange={v=>set("codigo",v)} /><FInput label="Data Aceite" value={form.ac} onChange={v=>set("ac",v)} type="date" /></FRow>
-      <FRow><FInput label="Faturamento Mensal Total (R$)" value={form.fat} onChange={v=>set("fat",v)} type="number" step="0.01" /></FRow>
+      {isAdmin && <FRow><FInput label="Faturamento Mensal Total (R$)" value={form.fat} onChange={v=>set("fat",v)} type="number" step="0.01" /></FRow>}
       <FRow><FInput label="Curva" value={form.cv} onChange={v=>set("cv",v)} select options={["S","A","B","C","D"]} /><FInput label="Tipo" value={form.tp} onChange={v=>set("tp",v)} select options={["REAL","PROJETO"]} /></FRow>
       <FRow><FInput label="Risco de Churn" value={form.ch} onChange={v=>set("ch",v)} select options={boolOpts} /><FInput label="Em Projeto" value={form.pr} onChange={v=>set("pr",v)} select options={boolOpts} /></FRow>
-      {isEdit && segmentosData?.length > 0 && (
+      {isAdmin && isEdit && segmentosData?.length > 0 && (
         <div style={{ marginTop:16, borderTop:"0.5px solid var(--color-border-tertiary)", paddingTop:16 }}>
           <div style={{ fontWeight:500, fontSize:13, marginBottom:10 }}>Faturamento por Segmento</div>
           <div style={{ fontSize:12, color:"var(--color-text-tertiary)", marginBottom:10 }}>Salvo automaticamente ao sair do campo. Deixe em branco para remover.</div>
@@ -2221,7 +2538,7 @@ function SingleClientModal({ onClose, onSave, initialData, segmentosData, onSave
           })}
         </div>
       )}
-      {!isEdit && segmentosData?.length > 0 && (
+      {isAdmin && !isEdit && segmentosData?.length > 0 && (
         <div style={{ marginTop:12, fontSize:12, color:"var(--color-text-tertiary)", padding:"8px 12px", background:"var(--color-background-secondary)", borderRadius:8 }}>
           <i className="ti ti-info-circle" style={{ fontSize:12 }} /> Após salvar o cliente, edite-o novamente para configurar o faturamento por segmento.
         </div>

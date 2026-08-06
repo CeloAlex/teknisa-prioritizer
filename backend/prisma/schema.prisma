@@ -68,8 +68,28 @@ model Segmento {
   produtos             Produto[]
   criterios            Criterio[]
   faturamentoSegmentos FaturamentoSegmento[]
+  operadores           Operador[]            @relation("OperadorSegmentos")
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
+}
+
+enum PapelOperador {
+  ADMIN
+  EDITOR
+  READONLY
+}
+
+model Operador {
+  id              Int           @id @default(autoincrement())
+  nome            String
+  email           String        @unique
+  senhaHash       String
+  papel           PapelOperador
+  ativo           Boolean       @default(true)
+  deveTrocarSenha Boolean       @default(true)
+  segmentos       Segmento[]    @relation("OperadorSegmentos")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 }
 
 model Produto {
