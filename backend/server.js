@@ -4,10 +4,16 @@ import cors from '@fastify/cors'
 import fastifyStatic from '@fastify/static'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import multipart from '@fastify/multipart'
+import { imageSize } from 'image-size'
 import { PrismaClient } from './generated/prisma/index.js'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { buildDocx } from './lib/docxGenerator.js'
+import { buildPdf } from './lib/pdfGenerator.js'
+import { gerarRequisitos, editarImagem } from './lib/llm.js'
+import { extractText } from './lib/extractText.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -79,6 +85,10 @@ await app.register(cors, {
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+})
+
+await app.register(multipart, {
+  limits: { fileSize: 8 * 1024 * 1024, files: 5 },
 })
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
@@ -245,6 +255,52 @@ app.delete('/api/operadores/:id', async (req, reply) => {
   return reply.status(204).send()
 })
 
+// ── Parâmetros LLM ───────────────────────────────────────────────────────────
+
+async function getParametroLLM() {
+  return prisma.parametroLLM.findUnique({ where: { provider: 'openai' } })
+}
+
+app.get('/api/parametros/llm', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN'])) return
+  const p = await getParametroLLM()
+  return {
+    configurado: !!p,
+    apiKeyMascarada: p ? `••••${p.apiKey.slice(-4)}` : null,
+    modeloTexto: p?.modeloTexto ?? 'gpt-4o',
+    modeloImagem: p?.modeloImagem ?? 'gpt-image-1',
+  }
+})
+
+app.put('/api/parametros/llm', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN'])) return
+  const { apiKey, modeloTexto, modeloImagem } = req.body ?? {}
+  const existing = await getParametroLLM()
+  if (!existing && !apiKey) {
+    return reply.status(400).send({ error: 'Informe a apiKey na primeira configuração' })
+  }
+  const p = await prisma.parametroLLM.upsert({
+    where: { provider: 'openai' },
+    update: {
+      ...(apiKey ? { apiKey } : {}),
+      ...(modeloTexto ? { modeloTexto } : {}),
+      ...(modeloImagem ? { modeloImagem } : {}),
+    },
+    create: {
+      provider: 'openai',
+      apiKey,
+      modeloTexto: modeloTexto || 'gpt-4o',
+      modeloImagem: modeloImagem || 'gpt-image-1',
+    },
+  })
+  return {
+    configurado: true,
+    apiKeyMascarada: `••••${p.apiKey.slice(-4)}`,
+    modeloTexto: p.modeloTexto,
+    modeloImagem: p.modeloImagem,
+  }
+})
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function normStr(s) {
@@ -336,7 +392,7 @@ app.get('/api/issues', async (req) => {
 app.post('/api/issues', async (req, reply) => {
   if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
   const { id, nome, categoria, cliente, produto, status, dataAbertura,
-          roadmap, atendeMultiplos, valor, curva, observacao, impeditiva,
+          roadmap, atendeMultiplos, valor, curva, observacao, descricao, impeditiva,
           aprovacao, motivoReprovacao, segmentoId } = req.body
 
   if (!id || !nome) {
@@ -356,6 +412,7 @@ app.post('/api/issues', async (req, reply) => {
     dataAbertura: dataAbertura ? new Date(dataAbertura) : null,
     roadmap: Boolean(roadmap), atendeMultiplos: Boolean(atendeMultiplos),
     valor: valor != null ? Number(valor) : null, curva, observacao,
+    descricao: descricao ?? null,
     impeditiva: impeditiva != null ? Boolean(impeditiva) : false,
     aprovacao: aprovacao ?? null,
     motivoReprovacao: motivoReprovacao ?? null,
@@ -584,6 +641,172 @@ app.delete('/api/criterios/:id', async (req, reply) => {
   if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
   const id = Number(req.params.id)
   await prisma.criterio.delete({ where: { id } }).catch(() => null)
+  return reply.status(204).send()
+})
+
+// ── Especificação (documento gerado por IA) ──────────────────────────────────
+
+const ACCEPTED_IMAGE_MIME = new Set(['image/png', 'image/jpeg'])
+const ACCEPTED_DOC_MIME = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+])
+
+async function getIssueSegmentoNome(issueProdutoNome) {
+  if (!issueProdutoNome) return null
+  const produtos = await prisma.produto.findMany({ include: { segmento: true } })
+  const prod = produtos.find(p => p.nome.toLowerCase().trim() === issueProdutoNome.toLowerCase().trim())
+  return prod?.segmento?.nome ?? null
+}
+
+app.get('/api/issues/:id/especificacao', async (req, reply) => {
+  const issueId = Number(req.params.id)
+  const esp = await prisma.especificacao.findUnique({
+    where: { issueId },
+    include: { geradoPor: { select: { nome: true } } },
+  })
+  if (!esp) return { existe: false }
+  return {
+    existe: true,
+    horasProgramacao: esp.horasProgramacao,
+    horasTeste: esp.horasTeste,
+    createdAt: esp.createdAt,
+    geradoPorNome: esp.geradoPor?.nome ?? null,
+  }
+})
+
+app.get('/api/issues/:id/especificacao/arquivo', async (req, reply) => {
+  const issueId = Number(req.params.id)
+  const formato = req.query.formato === 'pdf' ? 'pdf' : 'docx'
+  const esp = await prisma.especificacao.findUnique({ where: { issueId } })
+  if (!esp) return reply.status(404).send({ error: 'Documento não encontrado' })
+
+  reply.header('Content-Disposition', `attachment; filename="Especificacao_${issueId}.${formato}"`)
+  if (formato === 'pdf') {
+    reply.type('application/pdf')
+    return reply.send(esp.pdf)
+  }
+  reply.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+  return reply.send(esp.docx)
+})
+
+app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+  const issueId = Number(req.params.id)
+  const issue = await prisma.issue.findUnique({ where: { id: issueId } })
+  if (!issue) return reply.status(404).send({ error: 'Issue não encontrada' })
+
+  const parametro = await getParametroLLM()
+  if (!parametro) {
+    return reply.status(400).send({ error: 'Configure a chave da OpenAI em Parâmetros antes de gerar uma especificação.' })
+  }
+
+  let contexto = ''
+  const arquivos = []
+  try {
+    for await (const part of req.parts()) {
+      if (part.type === 'file') {
+        if (!ACCEPTED_IMAGE_MIME.has(part.mimetype) && !ACCEPTED_DOC_MIME.has(part.mimetype)) {
+          return reply.status(400).send({ error: `Tipo de arquivo não suportado: ${part.mimetype}` })
+        }
+        const buffer = await part.toBuffer()
+        arquivos.push({ buffer, mimeType: part.mimetype, filename: part.filename })
+      } else if (part.fieldname === 'contexto') {
+        contexto = part.value || ''
+      }
+    }
+  } catch (e) {
+    if (e.code === 'FST_REQ_FILE_TOO_LARGE') return reply.status(400).send({ error: 'Arquivo muito grande (máximo 8MB por arquivo).' })
+    if (e.code === 'FST_FILES_LIMIT') return reply.status(400).send({ error: 'Máximo de 5 arquivos por geração.' })
+    throw e
+  }
+
+  const segmentoNome = await getIssueSegmentoNome(issue.produto)
+  const imagens = arquivos.filter(a => ACCEPTED_IMAGE_MIME.has(a.mimeType))
+  const documentos = arquivos.filter(a => !ACCEPTED_IMAGE_MIME.has(a.mimeType))
+
+  const textosDocs = (await Promise.all(documentos.map(d => extractText(d.buffer, d.mimeType)))).filter(Boolean)
+  const anexosTexto = textosDocs.length ? textosDocs.join('\n\n---\n\n') : null
+
+  let requisitos
+  try {
+    requisitos = await gerarRequisitos({
+      issue: {
+        id: issue.id, nome: issue.nome, categoria: issue.categoria, cliente: issue.cliente,
+        produto: issue.produto, segmento: segmentoNome, descricao: issue.descricao,
+      },
+      contexto, anexosTexto,
+      apiKey: parametro.apiKey, modelo: parametro.modeloTexto,
+    })
+  } catch (e) {
+    req.log.error(e, 'Falha ao gerar requisitos via IA')
+    return reply.status(502).send({ error: 'Não foi possível gerar os requisitos via IA. Tente novamente.' })
+  }
+
+  const imagensEditadas = []
+  for (const img of imagens) {
+    try {
+      const editada = await editarImagem({
+        buffer: img.buffer, mimeType: img.mimeType,
+        prompt: `Anote esta captura de tela de sistema para refletir visualmente a seguinte alteração: ${requisitos.objetivo}. Mantenha o restante da tela idêntico, apenas destaque ou acrescente o elemento descrito.`,
+        apiKey: parametro.apiKey, modelo: parametro.modeloImagem,
+      })
+      imagensEditadas.push(editada)
+    } catch (e) {
+      req.log.error(e, 'Falha ao editar imagem via IA')
+      imagensEditadas.push(null)
+    }
+  }
+
+  const operador = req.operador
+  const dataStr = new Date().toLocaleDateString('pt-BR')
+  const docInput = {
+    issue, operadorNome: operador.nome, segmentoNome, dataStr, requisitos,
+    imagensAntes: imagens.map(i => ({ buffer: i.buffer })),
+    imagensDepois: imagensEditadas.filter(Boolean).map(b => ({ buffer: b })),
+  }
+
+  const [docxBuffer, pdfBuffer] = await Promise.all([
+    buildDocx(docInput),
+    buildPdf(docInput, imageSize),
+  ])
+
+  await prisma.especificacao.deleteMany({ where: { issueId } })
+  const especificacao = await prisma.especificacao.create({
+    data: {
+      issueId,
+      contexto: contexto || null,
+      requisitos,
+      horasProgramacao: Number(requisitos.horasProgramacao) || 0,
+      horasTeste: Number(requisitos.horasTeste) || 0,
+      docx: docxBuffer,
+      pdf: pdfBuffer,
+      geradoPorId: operador.id,
+      anexos: {
+        create: imagens.map((img, i) => ({
+          nomeArquivo: img.filename,
+          mimeType: img.mimeType,
+          dadosOriginais: img.buffer,
+          dadosEditados: imagensEditadas[i] ?? null,
+        })),
+      },
+    },
+  })
+
+  return {
+    existe: true,
+    horasProgramacao: especificacao.horasProgramacao,
+    horasTeste: especificacao.horasTeste,
+    createdAt: especificacao.createdAt,
+    geradoPorNome: operador.nome,
+  }
+})
+
+app.delete('/api/issues/:id/especificacao', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+  const issueId = Number(req.params.id)
+  await prisma.especificacao.deleteMany({ where: { issueId } })
   return reply.status(204).send()
 })
 

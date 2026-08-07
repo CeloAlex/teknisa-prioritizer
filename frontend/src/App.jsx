@@ -25,7 +25,7 @@ function appIssueToApi(i) {
     id: i.id, nome: i.n, categoria: i.cat ?? null, cliente: i.cl ?? null,
     produto: i.prod ?? null, status: i.st ?? null, dataAbertura: i.dt ?? null,
     roadmap: i.rm, atendeMultiplos: i.mc, valor: i.val ?? null,
-    curva: i.curva ?? null, observacao: i.ob ?? null,
+    curva: i.curva ?? null, observacao: i.ob ?? null, descricao: i.desc ?? null,
     impeditiva: !!i.imp,
     aprovacao: i.ap ?? null, motivoReprovacao: i.mr ?? null,
   }
@@ -35,7 +35,7 @@ function apiIssueToApp(i) {
     id: i.id, n: i.nome, cat: i.categoria, cl: i.cliente, prod: i.produto,
     st: i.status, dt: i.dataAbertura ? i.dataAbertura.slice(0, 10) : null,
     rm: i.roadmap ? 1 : 0, mc: i.atendeMultiplos ? 1 : 0,
-    val: i.valor, curva: i.curva, ob: i.observacao,
+    val: i.valor, curva: i.curva, ob: i.observacao, desc: i.descricao,
     seg: i.segmento ?? null, segOrd: i.segmentoOrdem ?? 999,
     imp: i.impeditiva ? 1 : 0,
     ap: i.aprovacao ?? null, mr: i.motivoReprovacao ?? null,
@@ -612,6 +612,7 @@ function parseIssueSheet(arrayBuffer) {
             rm:   Number(r[7]) || 0,
             mc:   Number(r[8]) || 0,
             val:  Number(r[9]) || 0,
+            desc: String(r[10] || "").trim() || null,
             curva: "B",
           });
         }
@@ -667,13 +668,13 @@ function parseClientSheet(arrayBuffer) {
 
 // ── APP ───────────────────────────────────────────────────────────────────────
 const PAPEL_LABELS = { ADMIN:"Administrador", EDITOR:"Editor", READONLY:"Somente Leitura" };
-const TAB_LABELS = { dashboard:"Painel", issues:"Issues Priorizadas", especificacao:"Especificação", clientes:"Clientes", criterios:"Critérios", operadores:"Operadores" };
-const TAB_ICONS  = { dashboard:"ti-layout-dashboard", issues:"ti-list-check", especificacao:"ti-file-description", clientes:"ti-building-community", criterios:"ti-settings", operadores:"ti-users" };
+const TAB_LABELS = { dashboard:"Painel", issues:"Issues Priorizadas", especificacao:"Especificação", clientes:"Clientes", criterios:"Critérios", operadores:"Operadores", parametros:"Parâmetros" };
+const TAB_ICONS  = { dashboard:"ti-layout-dashboard", issues:"ti-list-check", especificacao:"ti-file-description", clientes:"ti-building-community", criterios:"ti-settings", operadores:"ti-users", parametros:"ti-adjustments" };
 
 function tabsForRole(papel) {
   if (papel === "READONLY") return ["dashboard","issues","especificacao"];
   if (papel === "EDITOR")   return ["dashboard","issues","especificacao","clientes","criterios"];
-  return ["dashboard","issues","especificacao","clientes","criterios","operadores"]; // ADMIN
+  return ["dashboard","issues","especificacao","clientes","criterios","operadores","parametros"]; // ADMIN
 }
 
 export default function App() {
@@ -726,6 +727,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   const [segmentosData, setSegmentosData]  = useState([]);
   const [selectedSegmento, setSelectedSegmento] = useState(null); // { id, nome }
   const [operadoresData, setOperadoresData] = useState([]);
+  const [parametrosLLM, setParametrosLLM] = useState(null);
 
   // Segmentos que este operador pode visualizar/selecionar (todos, se Admin)
   const mySegmentos = isAdmin ? segmentosData : (operador.segmentos ?? []);
@@ -754,6 +756,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   useEffect(() => {
     if (!isAdmin) return
     apiFetch(API + '/operadores').then(r => r.json()).then(setOperadoresData).catch(() => {})
+    apiFetch(API + '/parametros/llm').then(r => r.json()).then(setParametrosLLM).catch(() => {})
   }, [isAdmin])
 
   // Carrega critérios do segmento selecionado (ou todos quando nenhum segmento está ativo)
@@ -972,6 +975,16 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     setOperadoresData(prev => prev.map(o => o.id === id ? { ...o, ativo:false } : o));
   }
 
+  async function handleSaveParametrosLLM(data) {
+    const res = await apiFetch(API + "/parametros/llm", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    const saved = await res.json();
+    if (!res.ok) throw new Error(saved.error || "Não foi possível salvar os parâmetros.");
+    setParametrosLLM(saved);
+  }
+
   const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.segmento.length || filters.aprovacao.length || filters.search;
 
   if (loading) return (
@@ -1067,6 +1080,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
         {tab==="clientes"     && <ClientsTab clients={clientsData} onAddSingle={c => handleAddClients([c])} isAdmin={isAdmin} segmentosData={segmentosData} onSaveFatSeg={handleSaveFatSeg} onDeleteFatSeg={handleDeleteFatSeg} />}
         {tab==="criterios"    && <CriteriosTab criteriaData={criteriaData} issues={filteredIssues} onToggle={handleToggleCriterio} onSave={handleSaveCriterio} onDelete={handleDeleteCriterio} onReorder={handleReorderCriterio} />}
         {tab==="operadores"   && <OperadoresTab operadores={operadoresData} segmentosData={segmentosData} currentOperadorId={operador.id} onCreate={handleCreateOperador} onUpdate={handleUpdateOperador} onDeactivate={handleDeactivateOperador} />}
+        {tab==="parametros"   && <ParametrosTab parametros={parametrosLLM} onSave={handleSaveParametrosLLM} />}
       </div>
 
       {confirmDelete && (
@@ -1184,7 +1198,7 @@ function DashboardTab({ stats, issues, enriched, criteriaData, segmento, isAdmin
 }
 
 // ── ISSUE ROW ─────────────────────────────────────────────────────────────────
-function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, criteriaData, isAdmin }) {
+function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecificacao, criteriaData, isAdmin }) {
   const [expanded, setExpanded] = useState(false);
   const gs = GROUP_STYLE[issue._sc.group] || GROUP_STYLE[6];
   const cb = curveBadge(issue._curva);
@@ -1220,6 +1234,15 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, criteriaDa
         <span style={{ fontSize:11, color:"var(--color-text-tertiary)", background:"var(--color-background-secondary)", borderRadius:4, padding:"1px 6px", whiteSpace:"nowrap", flexShrink:0 }}>{issue.st}</span>
         <i className={`ti ${expanded ? "ti-chevron-up" : "ti-chevron-down"}`} style={{ fontSize:14, color:"var(--color-text-tertiary)", flexShrink:0 }} aria-hidden />
         </div>
+        {onEspecificacao && (
+          <button
+            onClick={e => { e.stopPropagation(); onEspecificacao(issue); }}
+            title="Gerar Especificação"
+            style={{ flexShrink:0, padding:"3px 6px", borderRadius:6, border:"0.5px solid var(--color-border-secondary)", background:"transparent", cursor:"pointer", color:"var(--color-text-tertiary)", display:"flex", alignItems:"center" }}
+          >
+            <i className="ti ti-file-text" style={{ fontSize:13 }} />
+          </button>
+        )}
         {onEdit && (
           <button
             onClick={e => { e.stopPropagation(); onEdit(issue); }}
@@ -1244,6 +1267,11 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, criteriaDa
           {isAdmin && <Field label="Faturamento do cliente" value={issue._client ? `R$ ${(issue._client.fat||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />}
           <Field label="Aprovação" value={issue.ap ?? "(Não analisado)"} color={issue.ap==="Não"?"#A32D2D":issue.ap==="Sim"?"#27500A":undefined} />
           {issue.ap==="Não" && issue.mr && <Field label="Motivo da reprovação" value={issue.mr} />}
+          {issue.desc && (
+            <div style={{ gridColumn:"1 / -1" }}>
+              <Field label="Descrição" value={<span style={{ whiteSpace:"pre-wrap" }}>{issue.desc}</span>} />
+            </div>
+          )}
           <div style={{ gridColumn:"1 / -1" }}>
             <div style={{ fontSize:11, color:"var(--color-text-tertiary)", marginBottom:4 }}>Critérios de Priorização</div>
             <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
@@ -1272,6 +1300,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
   const [issueSort, setIssueSort]         = useState({ field: null, dir: "asc" });
   const [editIssue, setEditIssue]         = useState(null);
   const [newIssueOpen, setNewIssueOpen]   = useState(false);
+  const [especIssue, setEspecIssue]       = useState(null);
   function toggleIssueSort(field) {
     setIssueSort(s => s.field === field ? { field, dir: s.dir === "asc" ? "desc" : "asc" } : { field, dir: "asc" });
   }
@@ -1422,7 +1451,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             Nenhuma issue encontrada
           </div>
         )}
-        {displayedIssues.map((issue,i) => <IssueRow key={issue.id} issue={issue} rank={i+1} selected={selectedIds && selectedIds.has(issue.id)} onToggle={toggleSelect} onEdit={onEditSave && canEdit ? (i => setEditIssue(i)) : undefined} criteriaData={criteriaData} isAdmin={isAdmin} />)}
+        {displayedIssues.map((issue,i) => <IssueRow key={issue.id} issue={issue} rank={i+1} selected={selectedIds && selectedIds.has(issue.id)} onToggle={toggleSelect} onEdit={onEditSave && canEdit ? (i => setEditIssue(i)) : undefined} onEspecificacao={especMode ? (i => setEspecIssue(i)) : undefined} criteriaData={criteriaData} isAdmin={isAdmin} />)}
       </div>
       {editIssue && (
         <EditIssueModal
@@ -1439,7 +1468,148 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
           onSave={data => { onEditSave(data); setNewIssueOpen(false); }}
         />
       )}
+      {especIssue && (
+        <EspecificacaoModal
+          issue={especIssue}
+          canEdit={canEdit}
+          onClose={() => setEspecIssue(null)}
+        />
+      )}
     </div>
+  );
+}
+
+// ── MODAL ESPECIFICAÇÃO (IA) ──────────────────────────────────────────────────
+function EspecificacaoModal({ issue, canEdit, onClose }) {
+  const [meta, setMeta] = useState(null);
+  const [loadingMeta, setLoadingMeta] = useState(true);
+  const [contexto, setContexto] = useState("");
+  const [arquivos, setArquivos] = useState([]);
+  const [gerando, setGerando] = useState(false);
+  const [error, setError] = useState("");
+  const [confirmRegerar, setConfirmRegerar] = useState(false);
+
+  useEffect(() => {
+    apiFetch(API + `/issues/${issue.id}/especificacao`)
+      .then(r => r.json())
+      .then(m => { setMeta(m); setLoadingMeta(false); })
+      .catch(() => setLoadingMeta(false));
+  }, [issue.id]);
+
+  async function handleDownload(formato) {
+    const res = await apiFetch(API + `/issues/${issue.id}/especificacao/arquivo?formato=${formato}`);
+    if (!res.ok) { alert("Não foi possível baixar o documento."); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `Especificacao_${issue.id}.${formato}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function doGerar() {
+    setError("");
+    setGerando(true);
+    const fd = new FormData();
+    fd.append("contexto", contexto);
+    arquivos.forEach(f => fd.append("arquivos", f));
+    apiFetch(API + `/issues/${issue.id}/especificacao/gerar`, { method: "POST", body: fd })
+      .then(async res => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Não foi possível gerar a especificação.");
+        setMeta(data);
+        setContexto("");
+        setArquivos([]);
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setGerando(false));
+  }
+
+  function handleGerarClick() {
+    if (meta?.existe) setConfirmRegerar(true);
+    else doGerar();
+  }
+
+  return (
+    <Modal title={`Especificação — Issue #${issue.id}`} onClose={onClose} onSave={null} wide>
+      <div style={{ marginBottom:16, fontSize:13, color:"var(--color-text-secondary)" }}>{issue.n}</div>
+
+      {loadingMeta && (
+        <div style={{ fontSize:13, color:"var(--color-text-tertiary)" }}><i className="ti ti-loader-2 ti-spin" /> Carregando...</div>
+      )}
+
+      {!loadingMeta && meta?.existe && (
+        <div style={{ background:"var(--color-background-secondary)", borderRadius:10, padding:16, marginBottom:20 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+            <i className="ti ti-file-check" style={{ fontSize:16, color:"#27500A" }} aria-hidden />
+            <span style={{ fontWeight:500, fontSize:13 }}>Documento gerado</span>
+          </div>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>
+            Gerado em {new Date(meta.createdAt).toLocaleString("pt-BR")}{meta.geradoPorNome ? ` por ${meta.geradoPorNome}` : ""}
+          </div>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:12 }}>
+            Estimativa: <strong>{meta.horasProgramacao}h</strong> programação + <strong>{meta.horasTeste}h</strong> teste funcional
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={() => handleDownload("docx")} style={{ fontSize:12, padding:"6px 14px", display:"flex", alignItems:"center", gap:6 }}>
+              <i className="ti ti-file-type-docx" style={{ fontSize:13 }} /> Baixar .docx
+            </button>
+            <button onClick={() => handleDownload("pdf")} style={{ fontSize:12, padding:"6px 14px", display:"flex", alignItems:"center", gap:6 }}>
+              <i className="ti ti-file-type-pdf" style={{ fontSize:13 }} /> Baixar .pdf
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!loadingMeta && !meta?.existe && (
+        <div style={{ fontSize:13, color:"var(--color-text-tertiary)", marginBottom:20 }}>Nenhum documento gerado ainda para esta issue.</div>
+      )}
+
+      {canEdit && !loadingMeta && (
+        <div>
+          <div style={{ fontWeight:500, fontSize:13, marginBottom:10 }}>{meta?.existe ? "Regerar especificação" : "Gerar especificação"}</div>
+          <FInput label="Informações adicionais" value={contexto} onChange={setContexto} type="textarea" />
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Arquivos (prints, documentos — até 5, 8MB cada)</div>
+            <input
+              type="file" multiple
+              accept="image/png,image/jpeg,application/pdf,.docx,text/plain"
+              onChange={e => setArquivos([...e.target.files])}
+            />
+            {arquivos.length > 0 && (
+              <div style={{ fontSize:11, color:"var(--color-text-tertiary)", marginTop:6 }}>{arquivos.map(f => f.name).join(", ")}</div>
+            )}
+          </div>
+          {error && <div style={{ fontSize:12, color:"#A32D2D", marginBottom:12 }}>{error}</div>}
+          <button
+            onClick={handleGerarClick} disabled={gerando}
+            style={{ padding:"8px 18px", borderRadius:8, border:"none", background:"var(--color-blue-600)", color:"#fff", fontWeight:600, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}
+          >
+            {gerando
+              ? <><i className="ti ti-loader-2 ti-spin" /> Gerando... (pode levar até 1 minuto)</>
+              : <><i className="ti ti-sparkles" style={{ fontSize:14 }} /> {meta?.existe ? "Regerar" : "Gerar"}</>}
+          </button>
+        </div>
+      )}
+
+      {confirmRegerar && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:2000 }}>
+          <div style={{ background:"var(--color-background-primary)", borderRadius:16, border:"0.5px solid var(--color-border-tertiary)", padding:28, width:380, textAlign:"center" }}>
+            <div style={{ width:48, height:48, borderRadius:12, background:"#FCEBEB", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px" }}>
+              <i className="ti ti-alert-triangle" style={{ fontSize:24, color:"#A32D2D" }} />
+            </div>
+            <div style={{ fontWeight:500, fontSize:16, marginBottom:8 }}>Regerar especificação?</div>
+            <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:24 }}>
+              O documento atual será <strong>apagado permanentemente</strong> e substituído pelo novo.
+            </div>
+            <div style={{ display:"flex", gap:8, justifyContent:"center" }}>
+              <button onClick={() => setConfirmRegerar(false)} style={{ padding:"8px 20px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)", cursor:"pointer", fontSize:13, fontWeight:500 }}>Cancelar</button>
+              <button onClick={() => { setConfirmRegerar(false); doGerar(); }} style={{ padding:"8px 20px", borderRadius:8, border:"none", background:"#A32D2D", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:500 }}>Regerar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -1941,6 +2111,71 @@ function OperadorFormModal({ onClose, onSubmit, initialData, segmentosData, onDe
   );
 }
 
+// ── PARÂMETROS TAB ────────────────────────────────────────────────────────────
+function ParametrosTab({ parametros, onSave }) {
+  const [apiKey, setApiKey] = useState("");
+  const [modeloTexto, setModeloTexto] = useState("gpt-4o");
+  const [modeloImagem, setModeloImagem] = useState("gpt-image-1");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    if (!parametros) return;
+    setModeloTexto(parametros.modeloTexto ?? "gpt-4o");
+    setModeloImagem(parametros.modeloImagem ?? "gpt-image-1");
+  }, [parametros]);
+
+  async function handleSave() {
+    setError(""); setSuccess(false);
+    if (!parametros?.configurado && !apiKey.trim()) return setError("Informe a chave da OpenAI.");
+    setSaving(true);
+    try {
+      await onSave({ ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}), modeloTexto, modeloImagem });
+      setApiKey("");
+      setSuccess(true);
+    } catch (e) {
+      setError(e.message || "Não foi possível salvar os parâmetros.");
+    }
+    setSaving(false);
+  }
+
+  if (!parametros) return null;
+
+  return (
+    <div style={{ maxWidth:560 }}>
+      <div style={{ fontWeight:500, fontSize:16, marginBottom:2 }}>Parâmetros</div>
+      <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:20 }}>
+        Configure a integração com a OpenAI usada para gerar documentos de especificação a partir das issues.
+      </div>
+      <div style={{ background:"var(--color-background-primary)", borderRadius:12, border:"0.5px solid var(--color-border-tertiary)", padding:20 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:16 }}>
+          <i className="ti ti-key" style={{ fontSize:16, color:"var(--color-text-tertiary)" }} aria-hidden />
+          <span style={{ fontWeight:500, fontSize:14 }}>OpenAI</span>
+          {parametros.configurado && (
+            <span style={{ fontSize:11, background:"#EAF3DE", color:"#27500A", border:"0.5px solid #3B6D1144", borderRadius:6, padding:"1px 8px" }}>
+              Configurada ({parametros.apiKeyMascarada})
+            </span>
+          )}
+        </div>
+        <FInput
+          label={parametros.configurado ? "Nova API Key (deixe em branco para manter a atual)" : "API Key *"}
+          value={apiKey} onChange={setApiKey} type="password"
+        />
+        <FRow>
+          <FInput label="Modelo de texto" value={modeloTexto} onChange={setModeloTexto} />
+          <FInput label="Modelo de imagem" value={modeloImagem} onChange={setModeloImagem} />
+        </FRow>
+        {error && <div style={{ fontSize:12, color:"#A32D2D", marginBottom:12 }}>{error}</div>}
+        {success && <div style={{ fontSize:12, color:"#27500A", marginBottom:12 }}>Parâmetros salvos com sucesso.</div>}
+        <button onClick={handleSave} disabled={saving} style={{ padding:"8px 18px", borderRadius:8, border:"none", background:"var(--color-blue-600)", color:"#fff", fontWeight:600, fontSize:13, cursor:"pointer" }}>
+          {saving ? "Salvando..." : "Salvar"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── COMBOBOX DE PRODUTO COM CRIAÇÃO INLINE ────────────────────────────────────
 function CreatableProductSelect({ value, onChange, produtos, segmento, onAdd }) {
   const [query, setQuery] = useState(value || "");
@@ -2099,8 +2334,9 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
           <div style={{ background:"var(--color-background-secondary)", borderRadius:8, padding:12, marginBottom:16 }}>
             <div style={{ fontWeight:500, marginBottom:6, fontSize:13 }}>Layout esperado (linha 1 = cabeçalho):</div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:4 }}>
-              {[["A","Id (número)"],["B","Nome / Descrição"],["C","Categoria"],["D","Cliente"],["E","Produto"],
-                ["F","Status"],["G","Data Abertura (DD/MM/AAAA)"],["H","Roadmap (0/1)"],["I","Atende +1 (0/1)"],["J","Valor (R$)"]].map(([col,desc]) => (
+              {[["A","Id (número)"],["B","Nome"],["C","Categoria"],["D","Cliente"],["E","Produto"],
+                ["F","Status"],["G","Data Abertura (DD/MM/AAAA)"],["H","Roadmap (0/1)"],["I","Atende +1 (0/1)"],["J","Valor (R$)"],
+                ["K","Descrição"]].map(([col,desc]) => (
                 <div key={col} style={{ display:"flex", gap:4, alignItems:"center" }}>
                   <span style={{ background:"var(--color-background-info)", color:"var(--color-text-info)", borderRadius:4, padding:"1px 6px", fontSize:11, fontWeight:500, flexShrink:0 }}>{col}</span>
                   <span style={{ color:"var(--color-text-secondary)", fontSize:11 }}>{desc}</span>
@@ -2430,7 +2666,7 @@ const CAT_OPTS = ["Erro - prioridade alta","Erro - prioridade média","Erro - pr
 
 function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento }) {
   const today = new Date().toISOString().slice(0,10);
-  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", ob:"", ap:"", mr:"" });
+  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", ob:"", desc:"", ap:"", mr:"" });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
   const [produtos, setProdutos] = useState([]);
   const exists = form.id ? existingIssues.find(x => x.id === Number(form.id)) : null;
@@ -2459,7 +2695,7 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
       prod: form.prod||null, st: form.st||null, dt: form.dt||null,
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
       val: form.val !== "" ? Number(form.val) : null,
-      curva: form.curva||null, ob: form.ob||null,
+      curva: form.curva||null, ob: form.ob||null, desc: form.desc||null,
       ap: form.ap||null, mr: form.ap==="Não" ? form.mr||null : null,
     }]);
     onClose();
@@ -2477,7 +2713,10 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
         <FInput label="Status" value={form.st} onChange={v=>set("st",v)} />
       </FRow>
       <FRow mb={12}>
-        <FInput label="Nome / Descrição *" value={form.n} onChange={v=>set("n",v)} />
+        <FInput label="Nome *" value={form.n} onChange={v=>set("n",v)} />
+      </FRow>
+      <FRow mb={12}>
+        <FInput label="Descrição" value={form.desc} onChange={v=>set("desc",v)} type="textarea" />
       </FRow>
       <FRow>
         <FInput label="Cliente *" value={form.cl} onChange={v=>set("cl",v)} />
@@ -2616,6 +2855,7 @@ function EditIssueModal({ issue, onClose, onSave }) {
     val:  (issue.val ?? 0).toFixed(2),
     curva: issue.curva ?? "",
     ob:   issue.ob   ?? "",
+    desc: issue.desc ?? "",
     ap:   issue.ap   ?? "",
     mr:   issue.mr   ?? "",
   });
@@ -2628,7 +2868,7 @@ function EditIssueModal({ issue, onClose, onSave }) {
       prod: form.prod || null, st: form.st || null, dt: form.dt || null,
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
       val: form.val !== "" ? Number(form.val) : null,
-      curva: form.curva || null, ob: form.ob || null,
+      curva: form.curva || null, ob: form.ob || null, desc: form.desc || null,
       seg: issue.seg, segOrd: issue.segOrd,
       ap: form.ap || null, mr: form.ap === "Não" ? form.mr || null : null,
     }]);
@@ -2639,7 +2879,8 @@ function EditIssueModal({ issue, onClose, onSave }) {
       <div style={{ marginBottom:12, padding:"6px 10px", background:"var(--color-background-secondary)", borderRadius:6, fontSize:12, color:"var(--color-text-tertiary)" }}>
         ID: <strong style={{ color:"var(--color-text-primary)" }}>{issue.id}</strong>
       </div>
-      <FInput label="Nome / Descrição *" value={form.n} onChange={v=>set("n",v)} />
+      <FInput label="Nome *" value={form.n} onChange={v=>set("n",v)} />
+      <FInput label="Descrição" value={form.desc} onChange={v=>set("desc",v)} type="textarea" />
       <FRow>
         <FInput label="Cliente *" value={form.cl} onChange={v=>set("cl",v)} />
         <FInput label="Produto" value={form.prod} onChange={v=>set("prod",v)} select options={["Teknisa HCM","Teknisa Portal do Funcionário","Teknisa Portal do Gestor"]} />

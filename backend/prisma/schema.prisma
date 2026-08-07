@@ -20,11 +20,13 @@ model Issue {
   valor            Float?
   curva            String?
   observacao       String?
+  descricao        String?
   impeditiva       Boolean   @default(false)
   aprovacao        String?
   motivoReprovacao String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
+  especificacao    Especificacao?
 }
 
 model Client {
@@ -80,16 +82,17 @@ enum PapelOperador {
 }
 
 model Operador {
-  id              Int           @id @default(autoincrement())
-  nome            String
-  email           String        @unique
-  senhaHash       String
-  papel           PapelOperador
-  ativo           Boolean       @default(true)
-  deveTrocarSenha Boolean       @default(true)
-  segmentos       Segmento[]    @relation("OperadorSegmentos")
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id                    Int             @id @default(autoincrement())
+  nome                  String
+  email                 String          @unique
+  senhaHash             String
+  papel                 PapelOperador
+  ativo                 Boolean         @default(true)
+  deveTrocarSenha       Boolean         @default(true)
+  segmentos             Segmento[]      @relation("OperadorSegmentos")
+  especificacoesGeradas Especificacao[]
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
 }
 
 model Produto {
@@ -115,4 +118,39 @@ model Criterio {
   segmento   Segmento? @relation(fields: [segmentoId], references: [id])
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
+}
+
+model Especificacao {
+  id               Int      @id @default(autoincrement())
+  issueId          Int      @unique
+  issue            Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  contexto         String?
+  requisitos       Json
+  horasProgramacao Float
+  horasTeste       Float
+  docx             Bytes
+  pdf              Bytes
+  geradoPorId      Int?
+  geradoPor        Operador? @relation(fields: [geradoPorId], references: [id])
+  createdAt        DateTime @default(now())
+  anexos           EspecificacaoAnexo[]
+}
+
+model EspecificacaoAnexo {
+  id              Int           @id @default(autoincrement())
+  especificacaoId Int
+  especificacao   Especificacao @relation(fields: [especificacaoId], references: [id], onDelete: Cascade)
+  nomeArquivo     String
+  mimeType        String
+  dadosOriginais  Bytes
+  dadosEditados   Bytes?
+}
+
+model ParametroLLM {
+  id           Int      @id @default(autoincrement())
+  provider     String   @unique @default("openai")
+  apiKey       String
+  modeloTexto  String   @default("gpt-4o")
+  modeloImagem String   @default("gpt-image-1")
+  updatedAt    DateTime @updatedAt
 }
