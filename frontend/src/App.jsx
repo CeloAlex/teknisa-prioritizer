@@ -728,6 +728,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   const [selectedSegmento, setSelectedSegmento] = useState(null); // { id, nome }
   const [operadoresData, setOperadoresData] = useState([]);
   const [parametrosLLM, setParametrosLLM] = useState(null);
+  const [especificacoesExistentes, setEspecificacoesExistentes] = useState(new Set());
 
   // Segmentos que este operador pode visualizar/selecionar (todos, se Admin)
   const mySegmentos = isAdmin ? segmentosData : (operador.segmentos ?? []);
@@ -751,7 +752,12 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
       })
       .catch(e => console.error('Erro ao carregar dados:', e))
       .finally(() => setLoading(false))
+    apiFetch(API + '/especificacoes').then(r => r.json()).then(ids => setEspecificacoesExistentes(new Set(ids))).catch(() => {})
   }, [])
+
+  function marcarEspecificacaoGerada(issueId) {
+    setEspecificacoesExistentes(prev => new Set(prev).add(issueId));
+  }
 
   useEffect(() => {
     if (!isAdmin) return
@@ -1076,7 +1082,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
       <div style={{ padding:"24px", maxWidth:1280, margin:"0 auto" }}>
         {tab==="dashboard"    && <DashboardTab stats={stats} issues={sorted} enriched={segmentEnriched} criteriaData={criteriaData} segmento={selectedSegmento} isAdmin={isAdmin} />}
         {tab==="issues"       && <IssuesTab issues={filteredIssues} allIssues={sorted} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={canEdit ? selectedIds : undefined} toggleSelect={canEdit ? toggleSelect : undefined} toggleSelectAll={canEdit ? toggleSelectAll : undefined} onEditSave={handleAddIssues} canEdit={canEdit} isAdmin={isAdmin} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
-        {tab==="especificacao"&& <IssuesTab issues={filteredEspec}  allIssues={sorted.filter(x=>x.st==="Especificação")} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={canEdit ? selectedIds : undefined} toggleSelect={canEdit ? toggleSelect : undefined} toggleSelectAll={canEdit ? toggleSelectAll : undefined} especMode onEditSave={handleAddIssues} canEdit={canEdit} isAdmin={isAdmin} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
+        {tab==="especificacao"&& <IssuesTab issues={filteredEspec}  allIssues={sorted.filter(x=>x.st==="Especificação")} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={canEdit ? selectedIds : undefined} toggleSelect={canEdit ? toggleSelect : undefined} toggleSelectAll={canEdit ? toggleSelectAll : undefined} especMode onEditSave={handleAddIssues} canEdit={canEdit} isAdmin={isAdmin} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} especificacoesExistentes={especificacoesExistentes} onEspecificacaoGerada={marcarEspecificacaoGerada} />}
         {tab==="clientes"     && <ClientsTab clients={clientsData} onAddSingle={c => handleAddClients([c])} isAdmin={isAdmin} segmentosData={segmentosData} onSaveFatSeg={handleSaveFatSeg} onDeleteFatSeg={handleDeleteFatSeg} />}
         {tab==="criterios"    && <CriteriosTab criteriaData={criteriaData} issues={filteredIssues} onToggle={handleToggleCriterio} onSave={handleSaveCriterio} onDelete={handleDeleteCriterio} onReorder={handleReorderCriterio} />}
         {tab==="operadores"   && <OperadoresTab operadores={operadoresData} segmentosData={segmentosData} currentOperadorId={operador.id} onCreate={handleCreateOperador} onUpdate={handleUpdateOperador} onDeactivate={handleDeactivateOperador} />}
@@ -1198,7 +1204,7 @@ function DashboardTab({ stats, issues, enriched, criteriaData, segmento, isAdmin
 }
 
 // ── ISSUE ROW ─────────────────────────────────────────────────────────────────
-function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecificacao, criteriaData, isAdmin }) {
+function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecificacao, temEspecificacao, criteriaData, isAdmin }) {
   const [expanded, setExpanded] = useState(false);
   const gs = GROUP_STYLE[issue._sc.group] || GROUP_STYLE[6];
   const cb = curveBadge(issue._curva);
@@ -1237,10 +1243,11 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
         {onEspecificacao && (
           <button
             onClick={e => { e.stopPropagation(); onEspecificacao(issue); }}
-            title="Gerar Especificação"
-            style={{ flexShrink:0, padding:"3px 6px", borderRadius:6, border:"0.5px solid var(--color-border-secondary)", background:"transparent", cursor:"pointer", color:"var(--color-text-tertiary)", display:"flex", alignItems:"center" }}
+            title={temEspecificacao ? "Reespecificar" : "Especificar"}
+            style={{ flexShrink:0, padding:"5px 12px", borderRadius:8, border:"none", background:"var(--color-blue-600)", color:"#fff", cursor:"pointer", fontSize:12, fontWeight:600, display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}
           >
             <i className="ti ti-file-text" style={{ fontSize:13 }} />
+            {temEspecificacao ? "Reespecificar" : "Especificar"}
           </button>
         )}
         {onEdit && (
@@ -1295,7 +1302,7 @@ function Field({ label, value, color }) {
 }
 
 // ── ISSUES TAB ────────────────────────────────────────────────────────────────
-function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDone, issuesData, hasFilters, especMode, selectedIds, toggleSelect, toggleSelectAll, onEditSave, canEdit, isAdmin, segmentosData, criteriaData, selectedSegmento }) {
+function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDone, issuesData, hasFilters, especMode, selectedIds, toggleSelect, toggleSelectAll, onEditSave, canEdit, isAdmin, segmentosData, criteriaData, selectedSegmento, especificacoesExistentes, onEspecificacaoGerada }) {
   function sf(k, v) { setFilters(f => ({...f,[k]:v})); }
   const [issueSort, setIssueSort]         = useState({ field: null, dir: "asc" });
   const [editIssue, setEditIssue]         = useState(null);
@@ -1451,7 +1458,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             Nenhuma issue encontrada
           </div>
         )}
-        {displayedIssues.map((issue,i) => <IssueRow key={issue.id} issue={issue} rank={i+1} selected={selectedIds && selectedIds.has(issue.id)} onToggle={toggleSelect} onEdit={onEditSave && canEdit ? (i => setEditIssue(i)) : undefined} onEspecificacao={especMode ? (i => setEspecIssue(i)) : undefined} criteriaData={criteriaData} isAdmin={isAdmin} />)}
+        {displayedIssues.map((issue,i) => <IssueRow key={issue.id} issue={issue} rank={i+1} selected={selectedIds && selectedIds.has(issue.id)} onToggle={toggleSelect} onEdit={onEditSave && canEdit ? (i => setEditIssue(i)) : undefined} onEspecificacao={especMode ? (i => setEspecIssue(i)) : undefined} temEspecificacao={especificacoesExistentes?.has(issue.id)} criteriaData={criteriaData} isAdmin={isAdmin} />)}
       </div>
       {editIssue && (
         <EditIssueModal
@@ -1473,6 +1480,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
           issue={especIssue}
           canEdit={canEdit}
           onClose={() => setEspecIssue(null)}
+          onGerado={() => onEspecificacaoGerada && onEspecificacaoGerada(especIssue.id)}
         />
       )}
     </div>
@@ -1480,7 +1488,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
 }
 
 // ── MODAL ESPECIFICAÇÃO (IA) ──────────────────────────────────────────────────
-function EspecificacaoModal({ issue, canEdit, onClose }) {
+function EspecificacaoModal({ issue, canEdit, onClose, onGerado }) {
   const [meta, setMeta] = useState(null);
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [contexto, setContexto] = useState("");
@@ -1520,6 +1528,7 @@ function EspecificacaoModal({ issue, canEdit, onClose }) {
         setMeta(data);
         setContexto("");
         setArquivos([]);
+        onGerado && onGerado();
       })
       .catch(e => setError(e.message))
       .finally(() => setGerando(false));

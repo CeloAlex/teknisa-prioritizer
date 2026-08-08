@@ -653,12 +653,34 @@ const ACCEPTED_DOC_MIME = new Set([
   'text/plain',
 ])
 
+function descreverErroOpenAI(e) {
+  const code = e?.error?.code || e?.code
+  if (code === 'credit_balance_exhausted' || code === 'insufficient_quota') {
+    return 'A conta OpenAI configurada está sem créditos. Adicione créditos em platform.openai.com/settings/organization/billing e tente novamente.'
+  }
+  if (e?.status === 401 || code === 'invalid_api_key') {
+    return 'A chave da OpenAI configurada em Parâmetros é inválida. Verifique e salve novamente.'
+  }
+  if (e?.status === 429) {
+    return 'A OpenAI recusou a requisição por limite de uso (rate limit). Aguarde um instante e tente novamente.'
+  }
+  if (e?.status === 403) {
+    return 'A conta OpenAI não tem permissão para usar o modelo configurado. Verifique a organização em platform.openai.com.'
+  }
+  return 'Não foi possível gerar os requisitos via IA. Tente novamente.'
+}
+
 async function getIssueSegmentoNome(issueProdutoNome) {
   if (!issueProdutoNome) return null
   const produtos = await prisma.produto.findMany({ include: { segmento: true } })
   const prod = produtos.find(p => p.nome.toLowerCase().trim() === issueProdutoNome.toLowerCase().trim())
   return prod?.segmento?.nome ?? null
 }
+
+app.get('/api/especificacoes', async () => {
+  const rows = await prisma.especificacao.findMany({ select: { issueId: true } })
+  return rows.map(r => r.issueId)
+})
 
 app.get('/api/issues/:id/especificacao', async (req, reply) => {
   const issueId = Number(req.params.id)
@@ -741,7 +763,7 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
     })
   } catch (e) {
     req.log.error(e, 'Falha ao gerar requisitos via IA')
-    return reply.status(502).send({ error: 'Não foi possível gerar os requisitos via IA. Tente novamente.' })
+    return reply.status(502).send({ error: descreverErroOpenAI(e) })
   }
 
   const imagensEditadas = []
