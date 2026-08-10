@@ -714,7 +714,7 @@ app.get('/api/issues/:id/especificacao/arquivo', async (req, reply) => {
 })
 
 app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
-  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+  if (!requireRole(req, reply, ['ADMIN', 'EDITOR', 'READONLY'])) return
   const issueId = Number(req.params.id)
   const issue = await prisma.issue.findUnique({ where: { id: issueId } })
   if (!issue) return reply.status(404).send({ error: 'Issue não encontrada' })

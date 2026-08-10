@@ -1478,7 +1478,6 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
       {especIssue && (
         <EspecificacaoModal
           issue={especIssue}
-          canEdit={canEdit}
           onClose={() => setEspecIssue(null)}
           onGerado={() => onEspecificacaoGerada && onEspecificacaoGerada(especIssue.id)}
         />
@@ -1488,7 +1487,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
 }
 
 // ── MODAL ESPECIFICAÇÃO (IA) ──────────────────────────────────────────────────
-function EspecificacaoModal({ issue, canEdit, onClose, onGerado }) {
+function EspecificacaoModal({ issue, onClose, onGerado }) {
   const [meta, setMeta] = useState(null);
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [contexto, setContexto] = useState("");
@@ -1574,7 +1573,7 @@ function EspecificacaoModal({ issue, canEdit, onClose, onGerado }) {
         <div style={{ fontSize:13, color:"var(--color-text-tertiary)", marginBottom:20 }}>Nenhum documento gerado ainda para esta issue.</div>
       )}
 
-      {canEdit && !loadingMeta && (
+      {!loadingMeta && (
         <div>
           <div style={{ fontWeight:500, fontSize:13, marginBottom:10 }}>{meta?.existe ? "Regerar especificação" : "Gerar especificação"}</div>
           <FInput label="Informações adicionais" value={contexto} onChange={setContexto} type="textarea" />
