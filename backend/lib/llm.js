@@ -13,7 +13,7 @@ const REQUISITOS_JSON_SCHEMA = {
       'horasProgramacao', 'horasTeste',
     ],
     properties: {
-      objetivo: { type: 'string', description: 'Resumo do objetivo em 1-2 frases curtas, para o cabeçalho do documento.' },
+      objetivo: { type: 'string', description: 'Descrição completa do objetivo da issue, para o cabeçalho do documento. Não usar reticências (...) nem truncar o texto.' },
       introducao: {
         type: 'object', additionalProperties: false,
         required: ['objetivoDocumento', 'escopoContempla', 'escopoNaoContempla', 'glossario'],
@@ -74,7 +74,8 @@ Regras importantes:
 - "regrasNegocio", "cenarios" e "premissasTecnicas" só devem ter itens quando fizerem sentido para a complexidade da issue — para issues simples (ex: um ajuste pontual), é normal deixá-los como array vazio.
 - "horasProgramacao" e "horasTeste" são estimativas realistas para um programador júnior, considerando a complexidade descrita.
 - "horasTeste" (teste funcional) nunca deve ultrapassar 20% de "horasProgramacao".
-- Baseie-se apenas nas informações fornecidas; não invente integrações ou sistemas externos que não foram mencionados.`
+- Baseie-se apenas nas informações fornecidas; não invente integrações ou sistemas externos que não foram mencionados.
+- "objetivo" (cabeçalho do documento) deve trazer uma descrição completa do objetivo da issue, sem reticências (...) e sem truncar o texto.`
 
 function buildUserPrompt({ issue, contexto, anexosTexto }) {
   const partes = [
