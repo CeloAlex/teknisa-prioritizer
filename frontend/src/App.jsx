@@ -1244,7 +1244,7 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
           <button
             onClick={e => { e.stopPropagation(); onEspecificacao(issue); }}
             title={temEspecificacao ? "Reespecificar" : "Especificar"}
-            style={{ flexShrink:0, padding:"5px 12px", borderRadius:8, border:"none", background:"var(--color-blue-600)", color:"#fff", cursor:"pointer", fontSize:12, fontWeight:600, display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}
+            style={{ flexShrink:0, padding:"5px 12px", borderRadius:8, border:"none", background:temEspecificacao ? TEKNISA_GREEN : "var(--color-blue-600)", color:"#fff", cursor:"pointer", fontSize:12, fontWeight:600, display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}
           >
             <i className="ti ti-file-text" style={{ fontSize:13 }} />
             {temEspecificacao ? "Reespecificar" : "Especificar"}

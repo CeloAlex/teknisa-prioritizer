@@ -61,7 +61,7 @@ const REQUISITOS_JSON_SCHEMA = {
       },
       resultadoEsperado: { type: 'string' },
       horasProgramacao: { type: 'number', description: 'Estimativa de horas de programação para um desenvolvedor júnior implementar.' },
-      horasTeste: { type: 'number', description: 'Estimativa de horas de teste funcional.' },
+      horasTeste: { type: 'number', description: 'Estimativa de horas de teste funcional. Deve ser no máximo 20% do valor de horasProgramacao.' },
     },
   },
 }
@@ -73,6 +73,7 @@ Regras importantes:
 - "requisitosFuncionais" deve ter pelo menos 1 item, numerados RF001, RF002...
 - "regrasNegocio", "cenarios" e "premissasTecnicas" só devem ter itens quando fizerem sentido para a complexidade da issue — para issues simples (ex: um ajuste pontual), é normal deixá-los como array vazio.
 - "horasProgramacao" e "horasTeste" são estimativas realistas para um programador júnior, considerando a complexidade descrita.
+- "horasTeste" (teste funcional) nunca deve ultrapassar 20% de "horasProgramacao".
 - Baseie-se apenas nas informações fornecidas; não invente integrações ou sistemas externos que não foram mencionados.`
 
 function buildUserPrompt({ issue, contexto, anexosTexto }) {
@@ -102,7 +103,12 @@ export async function gerarRequisitos({ issue, contexto, anexosTexto, apiKey, mo
   })
   const content = completion.choices[0]?.message?.content
   if (!content) throw new Error('A IA não retornou conteúdo.')
-  return JSON.parse(content)
+  const resultado = JSON.parse(content)
+  const limiteHorasTeste = resultado.horasProgramacao * 0.2
+  if (resultado.horasTeste > limiteHorasTeste) {
+    resultado.horasTeste = Math.round(limiteHorasTeste * 10) / 10
+  }
+  return resultado
 }
 
 export async function editarImagem({ buffer, mimeType, prompt, apiKey, modelo }) {
