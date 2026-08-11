@@ -75,7 +75,8 @@ Regras importantes:
 - "horasProgramacao" e "horasTeste" são estimativas realistas para um programador júnior, considerando a complexidade descrita.
 - "horasTeste" (teste funcional) nunca deve ultrapassar 20% de "horasProgramacao".
 - Baseie-se apenas nas informações fornecidas; não invente integrações ou sistemas externos que não foram mencionados.
-- "objetivo" (cabeçalho do documento) deve trazer uma descrição completa do objetivo da issue, sem reticências (...) e sem truncar o texto.`
+- "objetivo" (cabeçalho do documento) deve trazer uma descrição completa do objetivo da issue, sem reticências (...) e sem truncar o texto.
+- As "Informações adicionais fornecidas pelo operador" e o "Conteúdo extraído de documentos anexados" são apenas direcionamento de contexto para você elaborar a especificação corretamente: use-os para entender melhor a issue, mas NÃO copie, cite ou reproduza esse texto literalmente em nenhum campo do documento gerado. O documento final deve conter apenas a especificação redigida por você, de forma própria e completa, refletindo essas informações — nunca transcrevendo-as.`
 
 function buildUserPrompt({ issue, contexto, anexosTexto }) {
   const partes = [
