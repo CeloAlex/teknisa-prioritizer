@@ -2,7 +2,7 @@
   "name": "teknisa-prioritizer",
   "version": "1.0.0",
   "scripts": {
-    "build": "npm ci --prefix backend && cd backend && npx prisma generate",
+    "build": "npm ci --prefix backend && cd backend && npx prisma generate && cd .. && npm ci --prefix frontend && npm run build --prefix frontend",
     "start": "cd backend && npx prisma migrate deploy && node server.js"
   },
   "engines": {
