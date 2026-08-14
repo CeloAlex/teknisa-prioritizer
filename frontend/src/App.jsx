@@ -573,7 +573,20 @@ function ForcePasswordChangeScreen({ operador, onDone, onLogout }) {
 }
 
 // ── IMPORTAÇÃO XLSX ───────────────────────────────────────────────────────────
-// Parse planilha de issues: colunas A-J conforme layout definido
+// Parse planilha de issues: colunas A-L conforme layout definido
+// Converte o valor bruto da coluna K (Impeditiva) em true/false/null.
+// null significa "planilha não trouxe indicativo" — nesse caso o valor
+// já persistido no banco deve ser preservado (ver handleImport).
+function parseImpeditivaCell(raw) {
+  if (raw === "" || raw === null || raw === undefined) return null;
+  const s = String(raw).trim().toLowerCase();
+  if (s === "") return null;
+  if (["sim", "s", "x", "true", "yes", "1"].includes(s)) return true;
+  if (["não", "nao", "n", "false", "no", "0"].includes(s)) return false;
+  const num = Number(s);
+  if (!Number.isNaN(num)) return num !== 0;
+  return null;
+}
 function parseIssueSheet(arrayBuffer) {
   const bytes = new Uint8Array(arrayBuffer);
   // Simple CSV/XLSX parser using SheetJS-like approach via raw parsing
@@ -612,7 +625,8 @@ function parseIssueSheet(arrayBuffer) {
             rm:   Number(r[7]) || 0,
             mc:   Number(r[8]) || 0,
             val:  Number(r[9]) || 0,
-            desc: String(r[10] || "").trim() || null,
+            imp:  parseImpeditivaCell(r[10]),
+            desc: String(r[11] || "").trim() || null,
             curva: "B",
           });
         }
@@ -622,6 +636,23 @@ function parseIssueSheet(arrayBuffer) {
       }
     } catch(e) { reject(e); }
   });
+}
+
+// Gera e baixa a planilha modelo para importação de issues (colunas A-L)
+function downloadIssueTemplate() {
+  const header = [
+    "Id", "Nome", "Categoria", "Cliente", "Produto", "Status",
+    "Data Abertura", "Roadmap", "Atende +1", "Valor", "Impeditiva", "Descrição",
+  ];
+  const exemplo = [
+    101, "Erro no cálculo de férias", "Erro - prioridade alta", "Cliente Exemplo",
+    "Teknisa HCM", "Backlog", "01/03/2026", 0, 1, 5000, "Sim", "Descrição da issue",
+  ];
+  const ws = XLSX.utils.aoa_to_sheet([header, exemplo]);
+  ws["!cols"] = [6,30,22,18,16,12,16,10,10,12,32,30].map(wch => ({ wch }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Issues");
+  XLSX.writeFile(wb, "modelo_importacao_issues.xlsx");
 }
 
 // Parse planilha de clientes: colunas A-H
@@ -2309,10 +2340,12 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
             rm:  existing.rm  ? existing.rm  : iss.rm,
             mc:  existing.mc  ? existing.mc  : iss.mc,
             val: (existing.val != null && existing.val > 0) ? existing.val : iss.val,
+            // planilha sem indicativo de impeditiva (null) preserva o valor já persistido
+            imp: iss.imp === null ? (existing.imp ? 1 : 0) : (iss.imp ? 1 : 0),
           };
         }
       }
-      return iss;
+      return { ...iss, imp: iss.imp ? 1 : 0 };
     });
     onSave(issues);
     onClose();
@@ -2340,11 +2373,20 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
       {tab==="file" && (
         <div>
           <div style={{ background:"var(--color-background-secondary)", borderRadius:8, padding:12, marginBottom:16 }}>
-            <div style={{ fontWeight:500, marginBottom:6, fontSize:13 }}>Layout esperado (linha 1 = cabeçalho):</div>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
+              <div style={{ fontWeight:500, fontSize:13 }}>Layout esperado (linha 1 = cabeçalho):</div>
+              <button type="button" onClick={downloadIssueTemplate} style={{
+                fontSize:12, padding:"4px 10px", display:"flex", alignItems:"center", gap:6,
+                background:"transparent", border:"0.5px solid var(--color-border-secondary)", borderRadius:6,
+                color:"var(--color-text-secondary)", cursor:"pointer",
+              }}>
+                <i className="ti ti-download" style={{ fontSize:13 }} aria-hidden /> Baixar planilha modelo
+              </button>
+            </div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:4 }}>
               {[["A","Id (número)"],["B","Nome"],["C","Categoria"],["D","Cliente"],["E","Produto"],
                 ["F","Status"],["G","Data Abertura (DD/MM/AAAA)"],["H","Roadmap (0/1)"],["I","Atende +1 (0/1)"],["J","Valor (R$)"],
-                ["K","Descrição"]].map(([col,desc]) => (
+                ["K","Impeditiva (Sim/Não, vazio = mantém valor atual)"],["L","Descrição"]].map(([col,desc]) => (
                 <div key={col} style={{ display:"flex", gap:4, alignItems:"center" }}>
                   <span style={{ background:"var(--color-background-info)", color:"var(--color-text-info)", borderRadius:4, padding:"1px 6px", fontSize:11, fontWeight:500, flexShrink:0 }}>{col}</span>
                   <span style={{ color:"var(--color-text-secondary)", fontSize:11 }}>{desc}</span>
