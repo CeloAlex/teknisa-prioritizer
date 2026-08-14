@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "scripts": {
     "build": "npm ci --prefix backend && cd backend && npx prisma generate && cd .. && npm ci --prefix frontend && npm run build --prefix frontend",
-    "start": "cd backend && npx prisma migrate deploy && node server.js"
+    "start": "cd backend && npx prisma migrate deploy && node server.js",
+    "test": "node --test \"backend/lib/**/*.test.js\""
   },
   "engines": {
     "node": ">=20"

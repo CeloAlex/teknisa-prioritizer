@@ -12,7 +12,8 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { buildDocx } from './lib/docxGenerator.js'
 import { buildPdf } from './lib/pdfGenerator.js'
-import { gerarRequisitos, editarImagem } from './lib/llm.js'
+import { gerarRequisitos, revisarRequisitos, editarImagem } from './lib/llm.js'
+import { resolverDecisoesAnexos } from './lib/anexoDecisao.js'
 import { extractText } from './lib/extractText.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -47,6 +48,14 @@ async function applyMigrations() {
        valor       DOUBLE PRECISION NOT NULL,
        UNIQUE("clienteId", "segmentoId")
      )`,
+    `DO $$ BEGIN
+       CREATE TYPE "StatusAnexo" AS ENUM ('ATIVO', 'REMOVIDO');
+     EXCEPTION WHEN duplicate_object THEN null;
+     END $$`,
+    `ALTER TABLE "EspecificacaoAnexo" ADD COLUMN IF NOT EXISTS "status" "StatusAnexo" NOT NULL DEFAULT 'ATIVO'`,
+    `ALTER TABLE "EspecificacaoAnexo" ADD COLUMN IF NOT EXISTS "motivoDecisao" TEXT`,
+    `ALTER TABLE "Especificacao" ADD COLUMN IF NOT EXISTS "modeloTexto" TEXT`,
+    `ALTER TABLE "Especificacao" ADD COLUMN IF NOT EXISTS "modeloImagem" TEXT`,
   ]
   for (const sql of steps) {
     await prisma.$executeRawUnsafe(sql)
@@ -652,6 +661,20 @@ const ACCEPTED_DOC_MIME = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'text/plain',
 ])
+function montarPromptMockup(mockup, objetivoGeral) {
+  if (!mockup) {
+    return `Anote esta captura de tela de sistema para refletir visualmente a seguinte alteração: ${objetivoGeral}. Mantenha o restante da tela idêntico, apenas destaque ou acrescente o elemento descrito.`
+  }
+  const partes = [
+    'Edite esta captura de tela do sistema Teknisa HCM.',
+    mockup.tela ? `Tela: ${mockup.tela}.` : null,
+    mockup.objetivo ? `Objetivo desta edição: ${mockup.objetivo}.` : null,
+    mockup.alteracoes?.length ? `Alterações a aplicar: ${mockup.alteracoes.join('; ')}.` : null,
+    mockup.preservar?.length ? `Preserve exatamente como está: ${mockup.preservar.join('; ')}.` : 'Preserve o restante da tela exatamente como está.',
+    'Faça uma edição conservadora: não redesenhe a interface, apenas aplique as alterações descritas.',
+  ].filter(Boolean)
+  return partes.join(' ')
+}
 
 function descreverErroOpenAI(e) {
   const code = e?.error?.code || e?.code
@@ -724,6 +747,13 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
     return reply.status(400).send({ error: 'Configure a chave da OpenAI em Parâmetros antes de gerar uma especificação.' })
   }
 
+  // Carrega a especificação/anexos anteriores ANTES de qualquer alteração, para que uma
+  // reespecificação possa reaproveitar contexto e mockups já existentes.
+  const especAnterior = await prisma.especificacao.findUnique({
+    where: { issueId },
+    include: { anexos: { where: { status: 'ATIVO' } } },
+  })
+
   let contexto = ''
   const arquivos = []
   try {
@@ -744,6 +774,7 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
     throw e
   }
 
+  const inicio = Date.now()
   const segmentoNome = await getIssueSegmentoNome(issue.produto)
   const imagens = arquivos.filter(a => ACCEPTED_IMAGE_MIME.has(a.mimeType))
   const documentos = arquivos.filter(a => !ACCEPTED_IMAGE_MIME.has(a.mimeType))
@@ -751,70 +782,175 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
   const textosDocs = (await Promise.all(documentos.map(d => extractText(d.buffer, d.mimeType)))).filter(Boolean)
   const anexosTexto = textosDocs.length ? textosDocs.join('\n\n---\n\n') : null
 
+  const anexosAnteriores = (especAnterior?.anexos ?? []).map((anexo, i) => ({
+    rotulo: `anexo_${i + 1}`,
+    filename: anexo.nomeArquivo,
+    mimeType: anexo.mimeType,
+    buffer: anexo.dadosEditados ?? anexo.dadosOriginais,
+    anexo,
+  }))
+  const contextoAnterior = especAnterior
+    ? ([especAnterior.contexto, especAnterior.requisitos?.objetivo].filter(Boolean).join('\n\n') || null)
+    : null
+
+  req.log.info({
+    issueId, qtdArquivos: arquivos.length,
+    tiposArquivos: [...new Set(arquivos.map(a => a.mimeType))],
+    ehReespecificacao: !!especAnterior,
+    qtdAnexosAnteriores: anexosAnteriores.length,
+  }, 'especificacao.iniciar')
+  req.log.info({ issueId, docsRecebidos: documentos.length, docsProcessados: textosDocs.length }, 'especificacao.docs_extraidos')
+
+  const issueParaIA = {
+    id: issue.id, nome: issue.nome, categoria: issue.categoria, cliente: issue.cliente,
+    produto: issue.produto, segmento: segmentoNome, descricao: issue.descricao,
+  }
+
   let requisitos
   try {
-    requisitos = await gerarRequisitos({
-      issue: {
-        id: issue.id, nome: issue.nome, categoria: issue.categoria, cliente: issue.cliente,
-        produto: issue.produto, segmento: segmentoNome, descricao: issue.descricao,
-      },
-      contexto, anexosTexto,
+    const draft = await gerarRequisitos({
+      issue: issueParaIA, contexto, anexosTexto, imagens,
+      anexosAnteriores: anexosAnteriores.map(({ rotulo, filename, mimeType, buffer }) => ({ rotulo, filename, mimeType, buffer })),
+      contextoAnterior,
       apiKey: parametro.apiKey, modelo: parametro.modeloTexto,
     })
+    req.log.info({
+      issueId, modelo: parametro.modeloTexto,
+      imagensAnalisadas: imagens.length + anexosAnteriores.length,
+      requisitosIdentificados: draft.requisitosFuncionais?.length ?? 0,
+      mockupsSolicitados: draft.mockups?.length ?? 0,
+    }, 'especificacao.requisitos_gerados')
+
+    requisitos = await revisarRequisitos({
+      requisitosDraft: draft, issue: issueParaIA, contexto, anexosTexto, contextoAnterior,
+      apiKey: parametro.apiKey, modelo: parametro.modeloTexto,
+    })
+    req.log.info({ issueId, requisitosFinais: requisitos.requisitosFuncionais?.length ?? 0 }, 'especificacao.revisado')
   } catch (e) {
-    req.log.error(e, 'Falha ao gerar requisitos via IA')
+    req.log.error({ issueId, etapa: 'requisitos', err: e }, 'especificacao.falha')
     return reply.status(502).send({ error: descreverErroOpenAI(e) })
   }
 
-  const imagensEditadas = []
-  for (const img of imagens) {
-    try {
-      const editada = await editarImagem({
-        buffer: img.buffer, mimeType: img.mimeType,
-        prompt: `Anote esta captura de tela de sistema para refletir visualmente a seguinte alteração: ${requisitos.objetivo}. Mantenha o restante da tela idêntico, apenas destaque ou acrescente o elemento descrito.`,
-        apiKey: parametro.apiKey, modelo: parametro.modeloImagem,
-      })
-      imagensEditadas.push(editada)
-    } catch (e) {
-      req.log.error(e, 'Falha ao editar imagem via IA')
-      imagensEditadas.push(null)
+  // Vincula, por rótulo, a decisão que a IA tomou para cada anexo anterior (MANTER por padrão
+  // quando a IA não decidiu nada — nunca remover uma imagem por omissão).
+  const decisoes = resolverDecisoesAnexos(requisitos.mockups, anexosAnteriores.map(a => a.rotulo))
+  const decisaoPorRotulo = new Map(decisoes.map(d => [d.rotulo, d]))
+
+  const avisos = []
+  const anexosFinais = []
+  const imagensAntes = []
+  const imagensDepois = []
+  let mockupsGerados = 0
+  let mockupsMantidos = 0
+
+  async function editarComRetry(buffer, mimeType, prompt, contextoLog) {
+    const tentativasMax = 3
+    for (let tentativa = 1; tentativa <= tentativasMax; tentativa++) {
+      try {
+        const editada = await editarImagem({ buffer, mimeType, prompt, apiKey: parametro.apiKey, modelo: parametro.modeloImagem })
+        req.log.info({ issueId, ...contextoLog, tentativa }, 'especificacao.imagem_editada')
+        return editada
+      } catch (e) {
+        const status = e?.status
+        const transitorio = status >= 500 || status === 429
+        req.log.error({ issueId, ...contextoLog, tentativa, err: e }, 'especificacao.imagem_falha')
+        if (!transitorio || tentativa === tentativasMax) return null
+      }
     }
+    return null
+  }
+
+  // 1) Anexos de uma especificação anterior: aplica a decisão (MANTER/ATUALIZAR/SUBSTITUIR/REMOVER).
+  for (const item of anexosAnteriores) {
+    const decisaoInfo = decisaoPorRotulo.get(item.rotulo)
+    const tipoDecisao = decisaoInfo?.tipo ?? 'MANTER'
+
+    if (tipoDecisao === 'REMOVER') {
+      anexosFinais.push({
+        nomeArquivo: item.anexo.nomeArquivo, mimeType: item.anexo.mimeType,
+        dadosOriginais: item.anexo.dadosOriginais, dadosEditados: item.anexo.dadosEditados,
+        status: 'REMOVIDO', motivoDecisao: decisaoInfo?.motivo ?? null,
+      })
+      continue
+    }
+
+    imagensAntes.push({ buffer: item.anexo.dadosOriginais })
+
+    if (tipoDecisao === 'MANTER') {
+      mockupsMantidos++
+      anexosFinais.push({
+        nomeArquivo: item.anexo.nomeArquivo, mimeType: item.anexo.mimeType,
+        dadosOriginais: item.anexo.dadosOriginais, dadosEditados: item.anexo.dadosEditados,
+        status: 'ATIVO', motivoDecisao: decisaoInfo?.motivo ?? null,
+      })
+      if (item.anexo.dadosEditados) imagensDepois.push({ buffer: item.anexo.dadosEditados })
+      continue
+    }
+
+    // ATUALIZAR ou SUBSTITUIR: sempre a partir do original pristine, nunca de uma edição anterior.
+    const prompt = montarPromptMockup(decisaoInfo.mockup, requisitos.objetivo)
+    const editada = await editarComRetry(item.anexo.dadosOriginais, item.anexo.mimeType, prompt, { tela: decisaoInfo.mockup?.tela, decisao: tipoDecisao, rotulo: item.rotulo })
+    if (editada) mockupsGerados++
+    else avisos.push(`Não foi possível gerar o mockup atualizado de "${item.filename}" após novas tentativas; a versão anterior foi mantida no documento.`)
+    anexosFinais.push({
+      nomeArquivo: item.anexo.nomeArquivo, mimeType: item.anexo.mimeType,
+      dadosOriginais: item.anexo.dadosOriginais, dadosEditados: editada ?? item.anexo.dadosEditados,
+      status: 'ATIVO', motivoDecisao: decisaoInfo?.motivo ?? null,
+    })
+    const imagemFinal = editada ?? item.anexo.dadosEditados
+    if (imagemFinal) imagensDepois.push({ buffer: imagemFinal })
+  }
+
+  // 2) Imagens novas enviadas nesta rodada: sempre editadas, com prompt específico por tela quando a IA associou um mockup a este arquivo.
+  for (const img of imagens) {
+    const mockup = (requisitos.mockups ?? []).find(m => m.referenciaImagem === img.filename)
+    const prompt = montarPromptMockup(mockup, requisitos.objetivo)
+    imagensAntes.push({ buffer: img.buffer })
+    const editada = await editarComRetry(img.buffer, img.mimeType, prompt, { tela: mockup?.tela, decisao: 'NOVA', arquivo: img.filename })
+    if (editada) mockupsGerados++
+    else avisos.push(`Não foi possível gerar o mockup de "${img.filename}" após novas tentativas; a tela ficará no documento apenas na versão original.`)
+    anexosFinais.push({
+      nomeArquivo: img.filename, mimeType: img.mimeType,
+      dadosOriginais: img.buffer, dadosEditados: editada ?? null,
+      status: 'ATIVO', motivoDecisao: null,
+    })
+    imagensDepois.push({ buffer: editada ?? img.buffer })
   }
 
   const operador = req.operador
   const dataStr = new Date().toLocaleDateString('pt-BR')
-  const docInput = {
-    issue, operadorNome: operador.nome, segmentoNome, dataStr, requisitos,
-    imagensAntes: imagens.map(i => ({ buffer: i.buffer })),
-    imagensDepois: imagensEditadas.filter(Boolean).map(b => ({ buffer: b })),
-  }
+  const docInput = { issue, operadorNome: operador.nome, segmentoNome, dataStr, requisitos, imagensAntes, imagensDepois }
 
   const [docxBuffer, pdfBuffer] = await Promise.all([
     buildDocx(docInput),
     buildPdf(docInput, imageSize),
   ])
 
-  await prisma.especificacao.deleteMany({ where: { issueId } })
-  const especificacao = await prisma.especificacao.create({
-    data: {
-      issueId,
-      contexto: contexto || null,
-      requisitos,
-      horasProgramacao: Number(requisitos.horasProgramacao) || 0,
-      horasTeste: Number(requisitos.horasTeste) || 0,
-      docx: docxBuffer,
-      pdf: pdfBuffer,
-      geradoPorId: operador.id,
-      anexos: {
-        create: imagens.map((img, i) => ({
-          nomeArquivo: img.filename,
-          mimeType: img.mimeType,
-          dadosOriginais: img.buffer,
-          dadosEditados: imagensEditadas[i] ?? null,
-        })),
+  // Cria a nova especificação e só então apaga a anterior, dentro de uma transação: se algo
+  // falhar no meio, a operação inteira é revertida e a especificação anterior permanece intacta.
+  const especificacao = await prisma.$transaction(async (tx) => {
+    await tx.especificacao.deleteMany({ where: { issueId } })
+    return tx.especificacao.create({
+      data: {
+        issueId,
+        contexto: contexto || null,
+        requisitos,
+        horasProgramacao: Number(requisitos.horasProgramacao) || 0,
+        horasTeste: Number(requisitos.horasTeste) || 0,
+        docx: docxBuffer,
+        pdf: pdfBuffer,
+        geradoPorId: operador.id,
+        modeloTexto: parametro.modeloTexto,
+        modeloImagem: parametro.modeloImagem,
+        anexos: { create: anexosFinais },
       },
-    },
+    })
   })
+
+  req.log.info({
+    issueId, duracaoMs: Date.now() - inicio,
+    mockupsGerados, mockupsMantidos, mockupsFalhos: avisos.length,
+  }, 'especificacao.concluida')
 
   return {
     existe: true,
@@ -822,6 +958,8 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
     horasTeste: especificacao.horasTeste,
     createdAt: especificacao.createdAt,
     geradoPorNome: operador.nome,
+    avisos,
+    mockupsResumo: anexosFinais.map(a => ({ tela: a.nomeArquivo, status: a.status })),
   }
 })
 

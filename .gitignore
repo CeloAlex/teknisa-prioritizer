@@ -12,6 +12,9 @@ frontend/dist/
 # Variáveis de ambiente (contém senha do banco)
 backend/.env
 
+# Saída do smoke test manual de especificação (docx/pdf gerados via OpenAI real)
+backend/scripts/output/
+
 # Logs
 *.log
 npm-debug.log*

@@ -132,8 +132,15 @@ model Especificacao {
   pdf              Bytes
   geradoPorId      Int?
   geradoPor        Operador? @relation(fields: [geradoPorId], references: [id])
+  modeloTexto      String?
+  modeloImagem     String?
   createdAt        DateTime @default(now())
   anexos           EspecificacaoAnexo[]
+}
+
+enum StatusAnexo {
+  ATIVO
+  REMOVIDO
 }
 
 model EspecificacaoAnexo {
@@ -144,6 +151,8 @@ model EspecificacaoAnexo {
   mimeType        String
   dadosOriginais  Bytes
   dadosEditados   Bytes?
+  status          StatusAnexo   @default(ATIVO)
+  motivoDecisao   String?
 }
 
 model ParametroLLM {

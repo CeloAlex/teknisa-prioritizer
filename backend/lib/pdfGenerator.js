@@ -110,8 +110,18 @@ export async function buildPdf({ issue, operadorNome, segmentoNome, dataStr, req
     requisitos.regrasNegocio.forEach(rn => bullet(doc, `${rn.codigo} – ${rn.texto}`))
   }
 
+  if (requisitos.validacoes?.length) {
+    heading(doc, '4. Validações')
+    requisitos.validacoes.forEach(v => bullet(doc, `${v.codigo} – Campo "${v.campo}": ${v.regra} (mensagem: "${v.mensagemErro}")`))
+  }
+
+  if (requisitos.excecoes?.length) {
+    heading(doc, '5. Exceções')
+    requisitos.excecoes.forEach(e => bullet(doc, `${e.codigo} – ${e.condicao}: ${e.comportamentoEsperado}`))
+  }
+
   if (requisitos.cenarios?.length) {
-    heading(doc, '4. Cenários de Utilização')
+    heading(doc, '6. Cenários de Utilização')
     requisitos.cenarios.forEach(c => {
       subheading(doc, c.codigo ? `${c.codigo} – ${c.titulo}` : c.titulo)
       body(doc, `Situação: ${c.situacao}`)
@@ -120,11 +130,16 @@ export async function buildPdf({ issue, operadorNome, segmentoNome, dataStr, req
   }
 
   if (requisitos.premissasTecnicas?.length) {
-    heading(doc, '5. Premissas Técnicas')
+    heading(doc, '7. Premissas Técnicas')
     requisitos.premissasTecnicas.forEach(pt => bullet(doc, `${pt.codigo} – ${pt.texto}`))
   }
 
-  heading(doc, '6. Resultado Esperado')
+  if (requisitos.pontosAValidar?.length) {
+    heading(doc, '8. Pontos a Validar')
+    requisitos.pontosAValidar.forEach(p => bullet(doc, p))
+  }
+
+  heading(doc, '9. Resultado Esperado')
   body(doc, requisitos.resultadoEsperado)
 
   function addImageBlock(img) {

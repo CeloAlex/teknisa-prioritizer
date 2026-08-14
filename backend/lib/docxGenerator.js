@@ -128,9 +128,21 @@ export async function buildDocx({ issue, operadorNome, segmentoNome, dataStr, re
     requisitos.regrasNegocio.forEach(rn => children.push(bullet(`${rn.codigo} – ${rn.texto}`)))
   }
 
-  // 4. Cenários de Utilização (opcional)
+  // 4. Validações (opcional)
+  if (requisitos.validacoes?.length) {
+    children.push(heading('4. Validações'))
+    requisitos.validacoes.forEach(v => children.push(bullet(`${v.codigo} – Campo "${v.campo}": ${v.regra} (mensagem: "${v.mensagemErro}")`)))
+  }
+
+  // 5. Exceções (opcional)
+  if (requisitos.excecoes?.length) {
+    children.push(heading('5. Exceções'))
+    requisitos.excecoes.forEach(e => children.push(bullet(`${e.codigo} – ${e.condicao}: ${e.comportamentoEsperado}`)))
+  }
+
+  // 6. Cenários de Utilização (opcional)
   if (requisitos.cenarios?.length) {
-    children.push(heading('4. Cenários de Utilização'))
+    children.push(heading('6. Cenários de Utilização'))
     requisitos.cenarios.forEach(c => {
       children.push(subheading(c.codigo ? `${c.codigo} – ${c.titulo}` : c.titulo))
       children.push(body(`Situação: ${c.situacao}`))
@@ -138,14 +150,20 @@ export async function buildDocx({ issue, operadorNome, segmentoNome, dataStr, re
     })
   }
 
-  // 5. Premissas Técnicas (opcional)
+  // 7. Premissas Técnicas (opcional)
   if (requisitos.premissasTecnicas?.length) {
-    children.push(heading('5. Premissas Técnicas'))
+    children.push(heading('7. Premissas Técnicas'))
     requisitos.premissasTecnicas.forEach(pt => children.push(bullet(`${pt.codigo} – ${pt.texto}`)))
   }
 
-  // 6. Resultado Esperado
-  children.push(heading('6. Resultado Esperado'))
+  // 8. Pontos a Validar (opcional)
+  if (requisitos.pontosAValidar?.length) {
+    children.push(heading('8. Pontos a Validar'))
+    requisitos.pontosAValidar.forEach(p => children.push(bullet(p)))
+  }
+
+  // 9. Resultado Esperado
+  children.push(heading('9. Resultado Esperado'))
   children.push(body(requisitos.resultadoEsperado))
 
   // Imagens

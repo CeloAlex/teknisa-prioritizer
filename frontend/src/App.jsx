@@ -1526,6 +1526,7 @@ function EspecificacaoModal({ issue, onClose, onGerado }) {
   const [gerando, setGerando] = useState(false);
   const [error, setError] = useState("");
   const [confirmRegerar, setConfirmRegerar] = useState(false);
+  const [avisos, setAvisos] = useState([]);
 
   useEffect(() => {
     apiFetch(API + `/issues/${issue.id}/especificacao`)
@@ -1547,6 +1548,7 @@ function EspecificacaoModal({ issue, onClose, onGerado }) {
 
   function doGerar() {
     setError("");
+    setAvisos([]);
     setGerando(true);
     const fd = new FormData();
     fd.append("contexto", contexto);
@@ -1556,6 +1558,7 @@ function EspecificacaoModal({ issue, onClose, onGerado }) {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Não foi possível gerar a especificação.");
         setMeta(data);
+        setAvisos(data.avisos || []);
         setContexto("");
         setArquivos([]);
         onGerado && onGerado();
@@ -1600,6 +1603,20 @@ function EspecificacaoModal({ issue, onClose, onGerado }) {
         </div>
       )}
 
+      {avisos.length > 0 && (
+        <div style={{ background:"#FFF7ED", border:"0.5px solid #FCD34D88", borderRadius:10, padding:14, marginBottom:20 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+            <i className="ti ti-alert-triangle" style={{ fontSize:15, color:"#92400E" }} aria-hidden />
+            <span style={{ fontWeight:500, fontSize:13, color:"#92400E" }}>Avisos da última geração</span>
+          </div>
+          <ul style={{ margin:0, paddingLeft:18 }}>
+            {avisos.map((a, i) => (
+              <li key={i} style={{ fontSize:12, color:"#92400E", marginBottom:4 }}>{a}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {!loadingMeta && !meta?.existe && (
         <div style={{ fontSize:13, color:"var(--color-text-tertiary)", marginBottom:20 }}>Nenhum documento gerado ainda para esta issue.</div>
       )}
@@ -1625,7 +1642,7 @@ function EspecificacaoModal({ issue, onClose, onGerado }) {
             style={{ padding:"8px 18px", borderRadius:8, border:"none", background:"var(--color-blue-600)", color:"#fff", fontWeight:600, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}
           >
             {gerando
-              ? <><i className="ti ti-loader-2 ti-spin" /> Gerando... (pode levar até 1 minuto)</>
+              ? <><i className="ti ti-loader-2 ti-spin" /> Gerando... (pode levar alguns minutos)</>
               : <><i className="ti ti-sparkles" style={{ fontSize:14 }} /> {meta?.existe ? "Regerar" : "Gerar"}</>}
           </button>
         </div>
@@ -1639,7 +1656,7 @@ function EspecificacaoModal({ issue, onClose, onGerado }) {
             </div>
             <div style={{ fontWeight:500, fontSize:16, marginBottom:8 }}>Regerar especificação?</div>
             <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:24 }}>
-              O documento atual será <strong>apagado permanentemente</strong> e substituído pelo novo.
+              A IA vai reavaliar a especificação considerando o que já existe. Mockups e imagens anteriores serão mantidos, atualizados ou substituídos automaticamente conforme a nova solicitação — nada é apagado sem necessidade.
             </div>
             <div style={{ display:"flex", gap:8, justifyContent:"center" }}>
               <button onClick={() => setConfirmRegerar(false)} style={{ padding:"8px 20px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)", cursor:"pointer", fontSize:13, fontWeight:500 }}>Cancelar</button>
