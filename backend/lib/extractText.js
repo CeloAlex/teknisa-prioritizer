@@ -30,6 +30,31 @@ function decodeHtmlEntities(s) {
     .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
 }
 
+const MIME_POR_EXTENSAO_IMAGEM = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' }
+
+// Extrai as imagens (prints/screenshots) coladas dentro de um .docx — muitos documentos de
+// especificação/anexo são majoritariamente imagens, com pouco ou nenhum texto em <w:t>, e ficariam
+// invisíveis para a IA se só o texto fosse considerado.
+export async function extractImagesFromDocx(buffer, limite = 8) {
+  try {
+    const zip = new AdmZip(buffer)
+    const entradas = zip.getEntries()
+      .filter(e => e.entryName.startsWith('word/media/'))
+      .sort((a, b) => a.entryName.localeCompare(b.entryName, undefined, { numeric: true }))
+    const imagens = []
+    for (const entrada of entradas) {
+      const ext = entrada.entryName.slice(entrada.entryName.lastIndexOf('.')).toLowerCase()
+      const mimeType = MIME_POR_EXTENSAO_IMAGEM[ext]
+      if (!mimeType) continue // ignora .emf/.wmf/.gif e outros formatos não suportados pela IA
+      imagens.push({ buffer: entrada.getData(), mimeType, nome: entrada.entryName.split('/').pop() })
+      if (imagens.length >= limite) break
+    }
+    return imagens
+  } catch {
+    return []
+  }
+}
+
 // Extração best-effort de texto para dar contexto extra à IA — não precisa ser perfeita.
 export async function extractText(buffer, mimeType) {
   try {

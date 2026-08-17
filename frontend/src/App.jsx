@@ -1630,10 +1630,27 @@ function EspecificacaoModal({ issue, onClose, onGerado }) {
             <input
               type="file" multiple
               accept="image/png,image/jpeg,application/pdf,.docx,text/plain"
-              onChange={e => setArquivos([...e.target.files])}
+              onChange={e => {
+                const novos = [...e.target.files];
+                setArquivos(prev => {
+                  const existentes = new Set(prev.map(f => `${f.name}:${f.size}`));
+                  const semDuplicata = novos.filter(f => !existentes.has(`${f.name}:${f.size}`));
+                  return [...prev, ...semDuplicata].slice(0, 5);
+                });
+                e.target.value = "";
+              }}
             />
             {arquivos.length > 0 && (
-              <div style={{ fontSize:11, color:"var(--color-text-tertiary)", marginTop:6 }}>{arquivos.map(f => f.name).join(", ")}</div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginTop:8 }}>
+                {arquivos.map((f, i) => (
+                  <span key={`${f.name}-${i}`} style={{ display:"flex", alignItems:"center", gap:4, background:"var(--color-background-secondary)", border:"0.5px solid var(--color-border-secondary)", borderRadius:6, padding:"2px 6px 2px 10px", fontSize:11, color:"var(--color-text-secondary)" }}>
+                    {f.name}
+                    <button type="button" onClick={() => setArquivos(prev => prev.filter((_, j) => j !== i))} style={{ background:"none", border:"none", cursor:"pointer", padding:2, display:"flex", color:"var(--color-text-tertiary)" }} title="Remover">
+                      <i className="ti ti-x" style={{ fontSize:11 }} />
+                    </button>
+                  </span>
+                ))}
+              </div>
             )}
           </div>
           {error && <div style={{ fontSize:12, color:"#A32D2D", marginBottom:12 }}>{error}</div>}

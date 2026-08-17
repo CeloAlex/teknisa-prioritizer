@@ -153,6 +153,7 @@ Seu papel NÃO é resumir a demanda recebida. É compreendê-la, decompor o prob
 Como analisar as entradas:
 - Trate a descrição da issue, o contexto adicional, os documentos anexados e as imagens como fontes de mesmo peso — nenhuma é "meramente secundária".
 - Imagens de telas são uma fonte primária de requisitos. Para cada imagem fornecida, identifique título da tela, campos, labels, grids, colunas, filtros, botões, abas, menus, agrupamentos, checkboxes, seletores, mensagens, ações e hierarquia visual, e registre isso em "telasAfetadas". Use esses elementos para inferir requisitos que o texto sozinho não deixaria claros (ex: onde um campo novo deve aparecer, quais colunas uma grid já tem).
+- Alguns documentos anexados (ex: .docx) podem ser majoritariamente compostos por imagens coladas (prints, mockups de referência), com pouco ou nenhum texto. Essas imagens são enviadas separadamente e identificadas como "extraída do documento anexado" — analise-as com a mesma atenção dedicada às demais imagens; frequentemente é ali que está a informação real da demanda (ex: os indicadores/campos a serem adicionados).
 - Não invente informações que não possam ser inferidas das entradas. Quando houver lacuna relevante, registre em "pontosAValidar" (pergunta em aberto) ou como um item de "premissasTecnicas" (afirmação assumida).
 
 Como fazer engenharia de requisitos:
@@ -216,7 +217,7 @@ function imagePart(buffer, mimeType) {
   }
 }
 
-function buildUserContent({ issue, contexto, anexosTexto, imagens = [], anexosAnteriores = [], contextoAnterior }) {
+function buildUserContent({ issue, contexto, anexosTexto, imagens = [], imagensDocumentos = [], anexosAnteriores = [], contextoAnterior }) {
   const content = [{ type: 'text', text: buildTextPrompt({ issue, contexto, anexosTexto, contextoAnterior }) }]
   for (const a of anexosAnteriores) {
     content.push({ type: 'text', text: `Anexo de uma especificação anterior desta issue — rótulo "${a.rotulo}" (arquivo: ${a.filename}). Decida o que fazer com esta tela em "mockups[].decisaoAnexoAnterior":` })
@@ -224,6 +225,10 @@ function buildUserContent({ issue, contexto, anexosTexto, imagens = [], anexosAn
   }
   for (const img of imagens) {
     content.push({ type: 'text', text: `Novo anexo enviado pelo operador nesta rodada (arquivo: ${img.filename}):` })
+    content.push(imagePart(img.buffer, img.mimeType))
+  }
+  for (const img of imagensDocumentos) {
+    content.push({ type: 'text', text: `Imagem extraída do documento anexado "${img.origem}" (${img.nome}) — use apenas como referência/contexto para entender a demanda (ex: telas ou indicadores a serem adicionados); não é, por si só, uma tela a ser editada como mockup:` })
     content.push(imagePart(img.buffer, img.mimeType))
   }
   return content
@@ -237,13 +242,13 @@ function clampHorasTeste(resultado) {
   return resultado
 }
 
-export async function gerarRequisitos({ issue, contexto, anexosTexto, imagens, anexosAnteriores, contextoAnterior, apiKey, modelo }) {
+export async function gerarRequisitos({ issue, contexto, anexosTexto, imagens, imagensDocumentos, anexosAnteriores, contextoAnterior, apiKey, modelo }) {
   const client = new OpenAI({ apiKey })
   const completion = await client.chat.completions.create({
     model: modelo || 'gpt-4o',
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: buildUserContent({ issue, contexto, anexosTexto, imagens, anexosAnteriores, contextoAnterior }) },
+      { role: 'user', content: buildUserContent({ issue, contexto, anexosTexto, imagens, imagensDocumentos, anexosAnteriores, contextoAnterior }) },
     ],
     response_format: { type: 'json_schema', json_schema: REQUISITOS_JSON_SCHEMA },
   })

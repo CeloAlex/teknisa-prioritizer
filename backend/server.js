@@ -14,7 +14,7 @@ import { buildDocx } from './lib/docxGenerator.js'
 import { buildPdf } from './lib/pdfGenerator.js'
 import { gerarRequisitos, revisarRequisitos, editarImagem } from './lib/llm.js'
 import { resolverDecisoesAnexos } from './lib/anexoDecisao.js'
-import { extractText } from './lib/extractText.js'
+import { extractText, extractImagesFromDocx } from './lib/extractText.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -753,6 +753,15 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
     where: { issueId },
     include: { anexos: { where: { status: 'ATIVO' } } },
   })
+  // O adapter @prisma/adapter-pg retorna colunas Bytes como Uint8Array puro, não Buffer —
+  // normaliza aqui para que todo o resto do código (base64, image-size, docx/pdf) opere sobre
+  // Buffers reais, como já acontece com os arquivos recém-enviados via multipart.
+  if (especAnterior) {
+    for (const anexo of especAnterior.anexos) {
+      anexo.dadosOriginais = Buffer.from(anexo.dadosOriginais)
+      if (anexo.dadosEditados) anexo.dadosEditados = Buffer.from(anexo.dadosEditados)
+    }
+  }
 
   let contexto = ''
   const arquivos = []
@@ -782,10 +791,22 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
   const textosDocs = (await Promise.all(documentos.map(d => extractText(d.buffer, d.mimeType)))).filter(Boolean)
   const anexosTexto = textosDocs.length ? textosDocs.join('\n\n---\n\n') : null
 
+  // Muitos .docx anexados são majoritariamente prints colados (pouco ou nenhum <w:t> extraível) —
+  // extrai as imagens embutidas para que a IA também as veja, e não apenas o texto (quase sempre vazio nesses casos).
+  const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  const imagensDocumentos = (await Promise.all(
+    documentos.filter(d => d.mimeType === DOCX_MIME).map(async d => {
+      const imgs = await extractImagesFromDocx(d.buffer)
+      return imgs.map(img => ({ ...img, origem: d.filename }))
+    })
+  )).flat()
+
   const anexosAnteriores = (especAnterior?.anexos ?? []).map((anexo, i) => ({
     rotulo: `anexo_${i + 1}`,
     filename: anexo.nomeArquivo,
-    mimeType: anexo.mimeType,
+    // images.edit (gpt-image-1) sempre retorna PNG, independente do formato de entrada — se
+    // estamos mostrando a versão editada, o mimeType correto é PNG, não o do upload original.
+    mimeType: anexo.dadosEditados ? 'image/png' : anexo.mimeType,
     buffer: anexo.dadosEditados ?? anexo.dadosOriginais,
     anexo,
   }))
@@ -799,7 +820,7 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
     ehReespecificacao: !!especAnterior,
     qtdAnexosAnteriores: anexosAnteriores.length,
   }, 'especificacao.iniciar')
-  req.log.info({ issueId, docsRecebidos: documentos.length, docsProcessados: textosDocs.length }, 'especificacao.docs_extraidos')
+  req.log.info({ issueId, docsRecebidos: documentos.length, docsProcessados: textosDocs.length, imagensExtraidasDeDocs: imagensDocumentos.length }, 'especificacao.docs_extraidos')
 
   const issueParaIA = {
     id: issue.id, nome: issue.nome, categoria: issue.categoria, cliente: issue.cliente,
@@ -809,14 +830,14 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
   let requisitos
   try {
     const draft = await gerarRequisitos({
-      issue: issueParaIA, contexto, anexosTexto, imagens,
+      issue: issueParaIA, contexto, anexosTexto, imagens, imagensDocumentos,
       anexosAnteriores: anexosAnteriores.map(({ rotulo, filename, mimeType, buffer }) => ({ rotulo, filename, mimeType, buffer })),
       contextoAnterior,
       apiKey: parametro.apiKey, modelo: parametro.modeloTexto,
     })
     req.log.info({
       issueId, modelo: parametro.modeloTexto,
-      imagensAnalisadas: imagens.length + anexosAnteriores.length,
+      imagensAnalisadas: imagens.length + anexosAnteriores.length + imagensDocumentos.length,
       requisitosIdentificados: draft.requisitosFuncionais?.length ?? 0,
       mockupsSolicitados: draft.mockups?.length ?? 0,
     }, 'especificacao.requisitos_gerados')

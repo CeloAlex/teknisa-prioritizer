@@ -28,11 +28,17 @@ const ISSUE_ID = Number(process.env.ISSUE_ID || 900001)
 let token = null
 
 async function api(path, opts = {}) {
-  const res = await fetch(BASE_URL + path, {
+  const fazer = () => fetch(BASE_URL + path, {
     ...opts,
     headers: { ...(opts.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   })
-  return res
+  try {
+    return await fazer()
+  } catch (e) {
+    console.warn(`[aviso] falha de rede em ${path}, tentando novamente uma vez: ${e.message}`)
+    await new Promise(r => setTimeout(r, 1000))
+    return fazer()
+  }
 }
 
 async function login() {
@@ -59,21 +65,36 @@ async function garantirIssueDeTeste() {
   console.log(`[ok] issue de teste #${ISSUE_ID} pronta`)
 }
 
+const MIME_POR_EXTENSAO = {
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+}
+
 async function arquivoDeApoio(nome) {
   const caminho = join(MODELO_DIR, nome)
   if (!existsSync(caminho)) {
     console.warn(`[aviso] arquivo de apoio não encontrado, pulando anexo: ${caminho}`)
     return null
   }
+  const ext = nome.slice(nome.lastIndexOf('.')).toLowerCase()
+  const mimeType = MIME_POR_EXTENSAO[ext]
+  if (!mimeType) {
+    console.warn(`[aviso] extensão sem mimetype mapeado (${ext}), pulando anexo: ${nome}`)
+    return null
+  }
   const buffer = await readFile(caminho)
-  return { buffer, nome }
+  return { buffer, nome, mimeType }
 }
 
 async function gerar(cenario, { contexto = '', arquivos = [] } = {}) {
   const fd = new FormData()
   fd.append('contexto', contexto)
   for (const a of arquivos) {
-    fd.append('arquivos', new Blob([a.buffer]), a.nome)
+    fd.append('arquivos', new Blob([a.buffer], { type: a.mimeType }), a.nome)
   }
   const inicio = Date.now()
   const res = await api(`/issues/${ISSUE_ID}/especificacao/gerar`, { method: 'POST', body: fd })
