@@ -398,14 +398,13 @@ app.get('/api/issues', async (req) => {
   return enriched.filter(i => i.segmento && allowedSegmentos.has(i.segmento))
 })
 
-app.post('/api/issues', async (req, reply) => {
-  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+async function upsertIssue(data) {
   const { id, nome, categoria, cliente, produto, estrutura, status, dataAbertura,
           roadmap, atendeMultiplos, valor, curva, observacao, descricao, impeditiva,
-          aprovacao, motivoReprovacao, segmentoId } = req.body
+          aprovacao, motivoReprovacao, segmentoId } = data
 
   if (!id || !nome) {
-    return reply.status(400).send({ error: 'id e nome são obrigatórios' })
+    throw Object.assign(new Error('id e nome são obrigatórios'), { statusCode: 400 })
   }
 
   if (produto && segmentoId) {
@@ -435,13 +434,43 @@ app.post('/api/issues', async (req, reply) => {
     motivoReprovacao: motivoReprovacao ?? null,
   }
 
-  const issue = await prisma.issue.upsert({
+  return prisma.issue.upsert({
     where:  { id: Number(id) },
     update: commonFields,
     create: { id: Number(id), ...commonFields },
   })
+}
 
-  return issue
+app.post('/api/issues', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+  try {
+    return await upsertIssue(req.body)
+  } catch (e) {
+    if (e.statusCode) return reply.status(e.statusCode).send({ error: e.message })
+    throw e
+  }
+})
+
+// Importação em lote: processa sequencialmente em um único request para evitar
+// disparar centenas de requisições HTTP concorrentes (planilhas grandes esgotavam
+// o pool de conexões do banco e causavam falhas silenciosas em parte das issues).
+app.post('/api/issues/bulk', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+  const { issues, segmentoId } = req.body
+  if (!Array.isArray(issues) || issues.length === 0) {
+    return reply.status(400).send({ error: 'issues é obrigatório' })
+  }
+
+  const failed = []
+  for (const item of issues) {
+    try {
+      await upsertIssue({ ...item, segmentoId })
+    } catch (e) {
+      failed.push({ id: item.id, error: e.message })
+    }
+  }
+
+  return { total: issues.length, succeeded: issues.length - failed.length, failed }
 })
 
 app.put('/api/issues/bulk-impeditiva', async (req, reply) => {

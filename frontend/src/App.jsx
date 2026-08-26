@@ -887,12 +887,14 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   }, [sorted]);
 
   async function handleAddIssues(issues) {
-    await Promise.allSettled(
-      issues.map(i => apiFetch(API + "/issues", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...appIssueToApi(i), segmentoId: selectedSegmento?.id }),
-      }))
-    )
+    const res = await apiFetch(API + "/issues/bulk", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issues: issues.map(appIssueToApi), segmentoId: selectedSegmento?.id }),
+    })
+    const result = await res.json()
+    if (result?.failed?.length) {
+      alert(`${result.failed.length} de ${result.total} issue(s) não foram salvas. IDs: ${result.failed.map(f => f.id).join(', ')}`)
+    }
     const fresh = await apiFetch(API + '/issues').then(r => r.json())
     setIssuesData(fresh.map(apiIssueToApp))
   }
