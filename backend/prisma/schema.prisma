@@ -13,6 +13,7 @@ model Issue {
   categoria        String?
   cliente          String?
   produto          String?
+  estrutura        String?
   status           String?
   dataAbertura     DateTime?
   roadmap          Boolean   @default(false)
@@ -68,6 +69,7 @@ model Segmento {
   id                   Int                   @id @default(autoincrement())
   nome                 String                @unique
   produtos             Produto[]
+  estruturas           Estrutura[]
   criterios            Criterio[]
   faturamentoSegmentos FaturamentoSegmento[]
   operadores           Operador[]            @relation("OperadorSegmentos")
@@ -102,6 +104,17 @@ model Produto {
   segmento   Segmento @relation(fields: [segmentoId], references: [id])
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+model Estrutura {
+  id         Int      @id @default(autoincrement())
+  nome       String
+  segmentoId Int
+  segmento   Segmento @relation(fields: [segmentoId], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([nome, segmentoId])
 }
 
 model Criterio {

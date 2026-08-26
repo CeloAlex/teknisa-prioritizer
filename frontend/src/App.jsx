@@ -23,7 +23,7 @@ function apiFetch(url, opts = {}) {
 function appIssueToApi(i) {
   return {
     id: i.id, nome: i.n, categoria: i.cat ?? null, cliente: i.cl ?? null,
-    produto: i.prod ?? null, status: i.st ?? null, dataAbertura: i.dt ?? null,
+    produto: i.prod ?? null, estrutura: i.est ?? null, status: i.st ?? null, dataAbertura: i.dt ?? null,
     roadmap: i.rm, atendeMultiplos: i.mc, valor: i.val ?? null,
     curva: i.curva ?? null, observacao: i.ob ?? null, descricao: i.desc ?? null,
     impeditiva: !!i.imp,
@@ -32,7 +32,7 @@ function appIssueToApi(i) {
 }
 function apiIssueToApp(i) {
   return {
-    id: i.id, n: i.nome, cat: i.categoria, cl: i.cliente, prod: i.produto,
+    id: i.id, n: i.nome, cat: i.categoria, cl: i.cliente, prod: i.produto, est: i.estrutura,
     st: i.status, dt: i.dataAbertura ? i.dataAbertura.slice(0, 10) : null,
     rm: i.roadmap ? 1 : 0, mc: i.atendeMultiplos ? 1 : 0,
     val: i.valor, curva: i.curva, ob: i.observacao, desc: i.descricao,
@@ -65,8 +65,9 @@ function isDone(st) { return st ? DONE_STATUS_KEYS.has(st.toLowerCase().trim()) 
 const CURVE_ORDER = { S:0, A:1, B:2, C:3, D:4 };
 const SLA_DIAS = { S:90, A:90, B:150 };
 
+const DIACRITICS_RE = new RegExp("[" + String.fromCharCode(0x0300) + "-" + String.fromCharCode(0x036f) + "]", "g");
 function normName(s) {
-  return (s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
+  return (s||"").toLowerCase().normalize("NFD").replace(DIACRITICS_RE,"").trim();
 }
 function findClient(issueClientName, clientsArr, deparaArr) {
   const norm = normName(issueClientName);
@@ -587,69 +588,99 @@ function parseImpeditivaCell(raw) {
   if (!Number.isNaN(num)) return num !== 0;
   return null;
 }
+// Cabeçalhos aceitos por coluna (normalizados: minúsculo, sem acento, espaços únicos).
+// A importação identifica cada coluna pelo nome do cabeçalho, não pela posição —
+// permite conviver com layouts diferentes (planilha modelo do app x exportações reais).
+const ISSUE_HEADER_ALIASES = {
+  id:        ["id"],
+  n:         ["nome"],
+  cat:       ["categoria"],
+  cl:        ["cliente"],
+  prod:      ["produto"],
+  est:       ["estrutura do produto", "estrutura"],
+  st:        ["status"],
+  dt:        ["data abertura", "data de abertura"],
+  rm:        ["roadmap"],
+  mc:        ["atende +1", "atende mais de um cliente", "atende multiplos clientes"],
+  val:       ["valor"],
+  imp:       ["impeditiva"],
+  desc:      ["descricao"],
+};
+function normHeader(s) {
+  return String(s || "").toLowerCase().normalize("NFD").replace(DIACRITICS_RE,"").replace(/\s+/g," ").trim();
+}
+function buildHeaderIndex(headerRow) {
+  const idx = {};
+  headerRow.forEach((cell, i) => {
+    const h = normHeader(cell);
+    for (const [key, aliases] of Object.entries(ISSUE_HEADER_ALIASES)) {
+      if (aliases.includes(h)) idx[key] = i;
+    }
+  });
+  return idx;
+}
 function parseIssueSheet(arrayBuffer) {
   const bytes = new Uint8Array(arrayBuffer);
-  // Simple CSV/XLSX parser using SheetJS-like approach via raw parsing
-  // We'll use a base64 approach with the browser's built-in APIs
-  // Returns array of issue objects
   return new Promise((resolve, reject) => {
     try {
-      // Use FileReader approach - we get the data via the File object in the caller
-      // Here we receive arrayBuffer directly, convert to workbook via XLSX if available
-      if (typeof XLSX !== "undefined") {
-        const wb = XLSX.read(bytes, { type:"array", cellDates:true });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:"" });
-        const issues = [];
-        for (let i = 1; i < rows.length; i++) {
-          const r = rows[i];
-          if (!r[0] && !r[1]) continue; // skip empty rows
-          const dtRaw = r[6];
-          let dt = "";
-          if (dtRaw instanceof Date) {
-            dt = dtRaw.toISOString().slice(0,10);
-          } else if (typeof dtRaw === "string" && dtRaw.includes("/")) {
-            const [d,m,y] = dtRaw.split("/");
-            dt = `${y}-${m?.padStart(2,"0")}-${d?.padStart(2,"0")}`;
-          } else if (typeof dtRaw === "string") {
-            dt = dtRaw.slice(0,10);
-          }
-          issues.push({
-            id:   Number(r[0]) || 0,
-            n:    String(r[1] || "").trim(),
-            cat:  String(r[2] || "").trim(),
-            cl:   String(r[3] || "").trim(),
-            prod: String(r[4] || "Teknisa HCM").trim(),
-            st:   String(r[5] || "Backlog").trim(),
-            dt,
-            rm:   Number(r[7]) || 0,
-            mc:   Number(r[8]) || 0,
-            val:  Number(r[9]) || 0,
-            imp:  parseImpeditivaCell(r[10]),
-            desc: String(r[11] || "").trim() || null,
-            curva: "B",
-          });
-        }
-        resolve(issues.filter(x => x.id > 0 && x.n));
-      } else {
+      if (typeof XLSX === "undefined") {
         reject(new Error("Biblioteca XLSX não carregada. Tente novamente em instantes."));
+        return;
       }
+      const wb = XLSX.read(bytes, { type:"array", cellDates:true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:"" });
+      if (rows.length === 0) { resolve([]); return; }
+      const idx = buildHeaderIndex(rows[0]);
+      const cell = (r, key) => idx[key] !== undefined ? r[idx[key]] : "";
+      const issues = [];
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!cell(r,"id") && !cell(r,"n")) continue; // skip empty rows
+        const dtRaw = cell(r,"dt");
+        let dt = "";
+        if (dtRaw instanceof Date) {
+          dt = dtRaw.toISOString().slice(0,10);
+        } else if (typeof dtRaw === "string" && dtRaw.includes("/")) {
+          const [d,m,y] = dtRaw.split("/");
+          dt = `${y}-${m?.padStart(2,"0")}-${d?.padStart(2,"0")}`;
+        } else if (typeof dtRaw === "string") {
+          dt = dtRaw.slice(0,10);
+        }
+        issues.push({
+          id:   Number(cell(r,"id")) || 0,
+          n:    String(cell(r,"n") || "").trim(),
+          cat:  String(cell(r,"cat") || "").trim(),
+          cl:   String(cell(r,"cl") || "").trim(),
+          prod: String(cell(r,"prod") || "Teknisa HCM").trim(),
+          est:  String(cell(r,"est") || "").trim() || null,
+          st:   String(cell(r,"st") || "Backlog").trim(),
+          dt,
+          rm:   Number(cell(r,"rm")) || 0,
+          mc:   Number(cell(r,"mc")) || 0,
+          val:  Number(cell(r,"val")) || 0,
+          imp:  parseImpeditivaCell(cell(r,"imp")),
+          desc: String(cell(r,"desc") || "").trim() || null,
+          curva: "B",
+        });
+      }
+      resolve(issues.filter(x => x.id > 0 && x.n));
     } catch(e) { reject(e); }
   });
 }
 
-// Gera e baixa a planilha modelo para importação de issues (colunas A-L)
+// Gera e baixa a planilha modelo para importação de issues
 function downloadIssueTemplate() {
   const header = [
     "Id", "Nome", "Categoria", "Cliente", "Produto", "Status",
-    "Data Abertura", "Roadmap", "Atende +1", "Valor", "Impeditiva", "Descrição",
+    "Data Abertura", "Roadmap", "Atende +1", "Valor", "Impeditiva", "Descrição", "Estrutura do Produto",
   ];
   const exemplo = [
     101, "Erro no cálculo de férias", "Erro - prioridade alta", "Cliente Exemplo",
-    "Teknisa HCM", "Backlog", "01/03/2026", 0, 1, 5000, "Sim", "Descrição da issue",
+    "Teknisa HCM", "Backlog", "01/03/2026", 0, 1, 5000, "Sim", "Descrição da issue", "Folha",
   ];
   const ws = XLSX.utils.aoa_to_sheet([header, exemplo]);
-  ws["!cols"] = [6,30,22,18,16,12,16,10,10,12,32,30].map(wch => ({ wch }));
+  ws["!cols"] = [6,30,22,18,16,12,16,10,10,12,32,30,22].map(wch => ({ wch }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Issues");
   XLSX.writeFile(wb, "modelo_importacao_issues.xlsx");
@@ -747,7 +778,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   const [issuesData, setIssuesData] = useState([]);
   const [clientsData, setClientsData] = useState([]);
   const [deparaData, setDeparaData]   = useState([]);
-  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], segmento:[], aprovacao:[], search:"" });
+  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], search:"" });
   const [showDone, setShowDone]     = useState(false);
   const [importModal, setImportModal] = useState(null); // "issue" | "client" | null
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -830,6 +861,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
       if (filters.curva.length     && !filters.curva.includes(issue._curva))  return false;
       if (filters.categoria.length && !filters.categoria.includes(issue.cat)) return false;
       if (filters.produto.length   && !filters.produto.includes(issue.prod))  return false;
+      if (filters.estrutura.length && !filters.estrutura.includes(issue.est)) return false;
       if (filters.segmento.length  && !filters.segmento.includes(issue.seg))  return false;
       if (filters.aprovacao.length && !filters.aprovacao.includes(issue.ap ?? "(Não analisado)")) return false;
       if (filters.search) {
@@ -1022,7 +1054,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     setParametrosLLM(saved);
   }
 
-  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.segmento.length || filters.aprovacao.length || filters.search;
+  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.search;
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'100vh', fontFamily:'system-ui,sans-serif', gap:12 }}>
@@ -1296,6 +1328,7 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
           <Field label="ID"                value={issue.id} />
           <Field label="Categoria"         value={issue.cat} />
           <Field label="Produto"           value={issue.prod} />
+          <Field label="Estrutura do Produto" value={issue.est} />
           <Field label="Data Abertura"     value={issue.dt} />
           <Field label="Dias em aberto"    value={days+" dias"} color={days>180?"#E24B4A":days>90?"#BA7517":undefined} />
           <Field label="É Impeditiva"      value={issue.imp ? "Sim" : "Não"} color={issue.imp ? "#92400E" : undefined} />
@@ -1355,6 +1388,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
   const allStatuses   = useMemo(() => [...new Set([...issuesData.map(x => x.st), "Homologado"])].filter(Boolean).sort(), [issuesData]);
   const allCategorias = useMemo(() => [...new Set(issuesData.map(x => x.cat))].sort(),  [issuesData]);
   const allProdutos   = useMemo(() => [...new Set(issuesData.map(x => x.prod))].sort(), [issuesData]);
+  const allEstruturas = useMemo(() => [...new Set(issuesData.map(x => x.est))].filter(Boolean).sort(), [issuesData]);
   const allSegmentos  = useMemo(() => (segmentosData ?? []).map(s => s.nome).sort(),    [segmentosData]);
 
   return (
@@ -1381,7 +1415,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             </button>
           )}
           {hasFilters && (
-            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], segmento:[], aprovacao:[], search:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
+            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], search:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
               <i className="ti ti-x" style={{ fontSize:13 }} aria-hidden /> Limpar
             </button>
           )}
@@ -1412,6 +1446,14 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             selected={filters.produto}
             onChange={v => sf("produto", v)}
           />
+          {allEstruturas.length > 0 && (
+            <MultiSelect
+              placeholder="Estrutura do Produto (todas)"
+              options={allEstruturas}
+              selected={filters.estrutura}
+              onChange={v => sf("estrutura", v)}
+            />
+          )}
           {allSegmentos.length > 0 && (
             <MultiSelect
               placeholder="Segmento (todos)"
@@ -1434,6 +1476,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             {filters.status.map(v => <FilterTag key={v} label={`Status: ${v}`} onRemove={() => sf("status", filters.status.filter(x=>x!==v))} />)}
             {filters.categoria.map(v => <FilterTag key={v} label={v} onRemove={() => sf("categoria", filters.categoria.filter(x=>x!==v))} />)}
             {filters.produto.map(v => <FilterTag key={v} label={v} onRemove={() => sf("produto", filters.produto.filter(x=>x!==v))} />)}
+            {filters.estrutura.map(v => <FilterTag key={v} label={v} onRemove={() => sf("estrutura", filters.estrutura.filter(x=>x!==v))} />)}
             {filters.segmento.map(v => <FilterTag key={v} label={`Segmento: ${v}`} onRemove={() => sf("segmento", filters.segmento.filter(x=>x!==v))} />)}
             {filters.aprovacao.map(v => <FilterTag key={v} label={`Aprovação: ${v}`} onRemove={() => sf("aprovacao", filters.aprovacao.filter(x=>x!==v))} />)}
             {filters.search && <FilterTag label={`"${filters.search}"`} onRemove={() => sf("search","")} />}
@@ -1494,6 +1537,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
       {editIssue && (
         <EditIssueModal
           issue={editIssue}
+          selectedSegmento={selectedSegmento}
           onClose={() => setEditIssue(null)}
           onSave={data => { onEditSave(data); setEditIssue(null); }}
         />
@@ -2250,13 +2294,13 @@ function ParametrosTab({ parametros, onSave }) {
 }
 
 // ── COMBOBOX DE PRODUTO COM CRIAÇÃO INLINE ────────────────────────────────────
-function CreatableProductSelect({ value, onChange, produtos, segmento, onAdd }) {
+function CreatableSelect({ value, onChange, options, segmento, onAdd, placeholder }) {
   const [query, setQuery] = useState(value || "");
   const [open, setOpen]   = useState(false);
 
   const q        = query.toLowerCase().trim();
-  const filtered = q ? produtos.filter(p => p.nome.toLowerCase().includes(q)) : produtos;
-  const exact    = produtos.some(p => p.nome.toLowerCase() === q);
+  const filtered = q ? options.filter(p => p.nome.toLowerCase().includes(q)) : options;
+  const exact    = options.some(p => p.nome.toLowerCase() === q);
   const canCreate = q && !exact;
 
   function pick(nome) { onChange(nome); setQuery(nome); setOpen(false); }
@@ -2269,7 +2313,7 @@ function CreatableProductSelect({ value, onChange, produtos, segmento, onAdd }) 
         onFocus={() => setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
         style={{ width:"100%", boxSizing:"border-box" }}
-        placeholder="Buscar ou criar produto…"
+        placeholder={placeholder ?? "Buscar ou criar…"}
       />
       {open && (filtered.length > 0 || canCreate) && (
         <div style={{
@@ -2310,8 +2354,9 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
   const [produtos, setProdutos] = useState([]);
+  const [estruturas, setEstruturas] = useState([]);
   const [form, setForm]       = useState({
-    id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"",
+    id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", est:"",
     st:"Backlog", dt:new Date().toISOString().slice(0,10), rm:"0", mc:"0", imp:"0", val:"0"
   });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
@@ -2319,6 +2364,10 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
   useEffect(() => {
     apiFetch(API + '/produtos').then(r => r.json()).then(setProdutos).catch(() => {})
   }, []);
+  useEffect(() => {
+    if (!selectedSegmento?.id) return;
+    apiFetch(API + '/estruturas?segmentoId=' + selectedSegmento.id).then(r => r.json()).then(setEstruturas).catch(() => {})
+  }, [selectedSegmento?.id]);
 
   async function handleAddProd(nome) {
     if (!selectedSegmento?.id) { setError("Selecione um segmento antes de criar um produto."); return; }
@@ -2330,6 +2379,18 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
     const novo = await res.json();
     setProdutos(prev => [...prev, novo]);
     set("prod", nome);
+  }
+
+  async function handleAddEstrutura(nome) {
+    if (!selectedSegmento?.id) { setError("Selecione um segmento antes de criar uma estrutura."); return; }
+    const res = await apiFetch(API + '/estruturas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nome, segmentoId: selectedSegmento.id }),
+    });
+    if (!res.ok) { setError("Erro ao criar estrutura."); return; }
+    const nova = await res.json();
+    setEstruturas(prev => [...prev, nova]);
+    set("est", nome);
   }
 
   // Verifica se o ID do formulário manual já existe
@@ -2408,7 +2469,7 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
         <div>
           <div style={{ background:"var(--color-background-secondary)", borderRadius:8, padding:12, marginBottom:16 }}>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
-              <div style={{ fontWeight:500, fontSize:13 }}>Layout esperado (linha 1 = cabeçalho):</div>
+              <div style={{ fontWeight:500, fontSize:13 }}>Colunas esperadas (linha 1 = cabeçalho):</div>
               <button type="button" onClick={downloadIssueTemplate} style={{
                 fontSize:12, padding:"4px 10px", display:"flex", alignItems:"center", gap:6,
                 background:"transparent", border:"0.5px solid var(--color-border-secondary)", borderRadius:6,
@@ -2417,10 +2478,14 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
                 <i className="ti ti-download" style={{ fontSize:13 }} aria-hidden /> Baixar planilha modelo
               </button>
             </div>
+            <div style={{ fontSize:11, color:"var(--color-text-tertiary)", marginBottom:6 }}>
+              Cada coluna é identificada pelo nome no cabeçalho (a ordem abaixo é a da planilha modelo).
+            </div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:4 }}>
               {[["A","Id (número)"],["B","Nome"],["C","Categoria"],["D","Cliente"],["E","Produto"],
                 ["F","Status"],["G","Data Abertura (DD/MM/AAAA)"],["H","Roadmap (0/1)"],["I","Atende +1 (0/1)"],["J","Valor (R$)"],
-                ["K","Impeditiva (Sim/Não, vazio = mantém valor atual)"],["L","Descrição"]].map(([col,desc]) => (
+                ["K","Impeditiva (Sim/Não, vazio = mantém valor atual)"],["L","Descrição"],
+                ["M","Estrutura do Produto (opcional)"]].map(([col,desc]) => (
                 <div key={col} style={{ display:"flex", gap:4, alignItems:"center" }}>
                   <span style={{ background:"var(--color-background-info)", color:"var(--color-text-info)", borderRadius:4, padding:"1px 6px", fontSize:11, fontWeight:500, flexShrink:0 }}>{col}</span>
                   <span style={{ color:"var(--color-text-secondary)", fontSize:11 }}>{desc}</span>
@@ -2520,12 +2585,26 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
             <FInput label="Cliente *" value={form.cl} onChange={v=>set("cl",v)} />
             <div style={{ flex:1 }}>
               <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Produto</div>
-              <CreatableProductSelect
+              <CreatableSelect
                 value={form.prod}
                 onChange={v => set("prod", v)}
-                produtos={produtos}
+                options={produtos}
                 segmento={selectedSegmento}
                 onAdd={handleAddProd}
+                placeholder="Buscar ou criar produto…"
+              />
+            </div>
+          </FRow>
+          <FRow>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Estrutura do Produto</div>
+              <CreatableSelect
+                value={form.est}
+                onChange={v => set("est", v)}
+                options={estruturas}
+                segmento={selectedSegmento}
+                onAdd={handleAddEstrutura}
+                placeholder="Buscar ou criar estrutura…"
               />
             </div>
           </FRow>
@@ -2750,14 +2829,19 @@ const CAT_OPTS = ["Erro - prioridade alta","Erro - prioridade média","Erro - pr
 
 function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento }) {
   const today = new Date().toISOString().slice(0,10);
-  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", ob:"", desc:"", ap:"", mr:"" });
+  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", est:"", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", ob:"", desc:"", ap:"", mr:"" });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
   const [produtos, setProdutos] = useState([]);
+  const [estruturas, setEstruturas] = useState([]);
   const exists = form.id ? existingIssues.find(x => x.id === Number(form.id)) : null;
 
   useEffect(() => {
     apiFetch(API + '/produtos').then(r => r.json()).then(setProdutos).catch(() => {})
   }, []);
+  useEffect(() => {
+    if (!selectedSegmento?.id) return;
+    apiFetch(API + '/estruturas?segmentoId=' + selectedSegmento.id).then(r => r.json()).then(setEstruturas).catch(() => {})
+  }, [selectedSegmento?.id]);
 
   async function handleAddProd(nome) {
     if (!selectedSegmento?.id) { alert("Selecione um segmento antes de criar um produto."); return; }
@@ -2771,12 +2855,24 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
     set("prod", nome);
   }
 
+  async function handleAddEstrutura(nome) {
+    if (!selectedSegmento?.id) { alert("Selecione um segmento antes de criar uma estrutura."); return; }
+    const res = await apiFetch(API + '/estruturas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nome, segmentoId: selectedSegmento.id }),
+    });
+    if (!res.ok) { alert("Erro ao criar estrutura."); return; }
+    const nova = await res.json();
+    setEstruturas(prev => [...prev, nova]);
+    set("est", nome);
+  }
+
   function handleSave() {
     if (!form.id || !form.n || !form.cl) return alert("ID, nome e cliente são obrigatórios.");
     if (form.ap === "Não" && !form.mr.trim()) return alert("Motivo da não aprovação é obrigatório.");
     onSave([{
       id: Number(form.id), n: form.n, cat: form.cat||null, cl: form.cl,
-      prod: form.prod||null, st: form.st||null, dt: form.dt||null,
+      prod: form.prod||null, est: form.est||null, st: form.st||null, dt: form.dt||null,
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
       val: form.val !== "" ? Number(form.val) : null,
       curva: form.curva||null, ob: form.ob||null, desc: form.desc||null,
@@ -2806,18 +2902,32 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
         <FInput label="Cliente *" value={form.cl} onChange={v=>set("cl",v)} />
         <div style={{ flex:1 }}>
           <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Produto</div>
-          <CreatableProductSelect
+          <CreatableSelect
             value={form.prod}
             onChange={v => set("prod", v)}
-            produtos={produtos}
+            options={produtos}
             segmento={selectedSegmento}
             onAdd={handleAddProd}
+            placeholder="Buscar ou criar produto…"
           />
         </div>
       </FRow>
       <FRow>
         <FInput label="Categoria" value={form.cat} onChange={v=>set("cat",v)} select options={CAT_OPTS} />
         <FInput label="Data Abertura" value={form.dt} onChange={v=>set("dt",v)} type="date" />
+      </FRow>
+      <FRow>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Estrutura do Produto</div>
+          <CreatableSelect
+            value={form.est}
+            onChange={v => set("est", v)}
+            options={estruturas}
+            segmento={selectedSegmento}
+            onAdd={handleAddEstrutura}
+            placeholder="Buscar ou criar estrutura…"
+          />
+        </div>
       </FRow>
       <FRow>
         <FInput label="Curva" value={form.curva} onChange={v=>set("curva",v)} select options={["","S","A","B","C","D"]} />
@@ -2925,12 +3035,13 @@ function SingleClientModal({ onClose, onSave, initialData, isAdmin, segmentosDat
 }
 
 // ── MODAL EDITAR ISSUE ────────────────────────────────────────────────────────
-function EditIssueModal({ issue, onClose, onSave }) {
+function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
   const [form, setForm] = useState({
     n:    issue.n    ?? "",
     cat:  issue.cat  ?? "Erro - prioridade alta",
     cl:   issue.cl   ?? "",
     prod: issue.prod ?? "Teknisa HCM",
+    est:  issue.est  ?? "",
     st:   issue.st   ?? "",
     dt:   issue.dt   ?? "",
     rm:   String(issue.rm  ?? 0),
@@ -2944,12 +3055,28 @@ function EditIssueModal({ issue, onClose, onSave }) {
     mr:   issue.mr   ?? "",
   });
   const set = (k, v) => setForm(f => ({...f, [k]: v}));
+  const [estruturas, setEstruturas] = useState([]);
+  useEffect(() => {
+    if (!selectedSegmento?.id) return;
+    apiFetch(API + '/estruturas?segmentoId=' + selectedSegmento.id).then(r => r.json()).then(setEstruturas).catch(() => {})
+  }, [selectedSegmento?.id]);
+  async function handleAddEstrutura(nome) {
+    if (!selectedSegmento?.id) { alert("Selecione um segmento antes de criar uma estrutura."); return; }
+    const res = await apiFetch(API + '/estruturas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nome, segmentoId: selectedSegmento.id }),
+    });
+    if (!res.ok) { alert("Erro ao criar estrutura."); return; }
+    const nova = await res.json();
+    setEstruturas(prev => [...prev, nova]);
+    set("est", nome);
+  }
   function handleSave() {
     if (!form.n || !form.cl) return alert("Nome e cliente são obrigatórios.");
     if (form.ap === "Não" && !form.mr.trim()) return alert("Motivo da não aprovação é obrigatório.");
     onSave([{
       id: issue.id, n: form.n, cat: form.cat || null, cl: form.cl,
-      prod: form.prod || null, st: form.st || null, dt: form.dt || null,
+      prod: form.prod || null, est: form.est || null, st: form.st || null, dt: form.dt || null,
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
       val: form.val !== "" ? Number(form.val) : null,
       curva: form.curva || null, ob: form.ob || null, desc: form.desc || null,
@@ -2968,6 +3095,19 @@ function EditIssueModal({ issue, onClose, onSave }) {
       <FRow>
         <FInput label="Cliente *" value={form.cl} onChange={v=>set("cl",v)} />
         <FInput label="Produto" value={form.prod} onChange={v=>set("prod",v)} select options={["Teknisa HCM","Teknisa Portal do Funcionário","Teknisa Portal do Gestor"]} />
+      </FRow>
+      <FRow>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Estrutura do Produto</div>
+          <CreatableSelect
+            value={form.est}
+            onChange={v => set("est", v)}
+            options={estruturas}
+            segmento={selectedSegmento}
+            onAdd={handleAddEstrutura}
+            placeholder="Buscar ou criar estrutura…"
+          />
+        </div>
       </FRow>
       <FRow>
         <FInput label="Categoria" value={form.cat} onChange={v=>set("cat",v)} select options={["Erro - prioridade alta","Erro - prioridade média","Erro - prioridade baixa","Legislação","Implementação - Customização","Sugestão de melhoria","Evolução","Demanda de Atualização","Dúvida"]} />

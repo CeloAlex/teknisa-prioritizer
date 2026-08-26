@@ -400,7 +400,7 @@ app.get('/api/issues', async (req) => {
 
 app.post('/api/issues', async (req, reply) => {
   if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
-  const { id, nome, categoria, cliente, produto, status, dataAbertura,
+  const { id, nome, categoria, cliente, produto, estrutura, status, dataAbertura,
           roadmap, atendeMultiplos, valor, curva, observacao, descricao, impeditiva,
           aprovacao, motivoReprovacao, segmentoId } = req.body
 
@@ -416,8 +416,16 @@ app.post('/api/issues', async (req, reply) => {
     })
   }
 
+  if (estrutura && segmentoId) {
+    await prisma.estrutura.upsert({
+      where:  { nome_segmentoId: { nome: estrutura, segmentoId: Number(segmentoId) } },
+      update: {},
+      create: { nome: estrutura, segmentoId: Number(segmentoId) },
+    })
+  }
+
   const commonFields = {
-    nome, categoria, cliente, produto, status,
+    nome, categoria, cliente, produto, estrutura: estrutura ?? null, status,
     dataAbertura: dataAbertura ? new Date(dataAbertura) : null,
     roadmap: Boolean(roadmap), atendeMultiplos: Boolean(atendeMultiplos),
     valor: valor != null ? Number(valor) : null, curva, observacao,
@@ -593,6 +601,26 @@ app.delete('/api/produtos/:id', async (req, reply) => {
   if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
   await prisma.produto.delete({ where: { id: Number(req.params.id) } }).catch(() => null)
   return reply.status(204).send()
+})
+
+// ── Estruturas (nível intermediário entre Segmento e Produto) ────────────────
+
+app.get('/api/estruturas', async (req) => {
+  const { segmentoId } = req.query
+  const where = segmentoId != null ? { segmentoId: Number(segmentoId) } : {}
+  return prisma.estrutura.findMany({ where, orderBy: { nome: 'asc' }, include: { segmento: true } })
+})
+
+app.post('/api/estruturas', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+  const { nome, segmentoId } = req.body
+  if (!nome || !segmentoId) return reply.status(400).send({ error: 'nome e segmentoId são obrigatórios' })
+  const estrutura = await prisma.estrutura.upsert({
+    where: { nome_segmentoId: { nome, segmentoId: Number(segmentoId) } },
+    update: {},
+    create: { nome, segmentoId: Number(segmentoId) },
+  })
+  return estrutura
 })
 
 // ── Criterios ────────────────────────────────────────────────────────────────
