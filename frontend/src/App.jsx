@@ -606,6 +606,10 @@ const ISSUE_HEADER_ALIASES = {
   imp:       ["impeditiva"],
   desc:      ["descricao"],
 };
+// Campos que, quando vêm vazios da planilha (null), não devem apagar dado já
+// existente ao atualizar uma issue — só entram com um padrão quando a issue é nova.
+const BLANK_PRESERVE_FIELDS = ["cat", "cl", "prod", "st", "dt", "desc", "est", "curva"];
+const NEW_ROW_DEFAULTS = { prod: "Teknisa HCM", st: "Backlog", curva: "B" };
 function normHeader(s) {
   return String(s || "").toLowerCase().normalize("NFD").replace(DIACRITICS_RE,"").replace(/\s+/g," ").trim();
 }
@@ -647,21 +651,25 @@ function parseIssueSheet(arrayBuffer) {
         } else if (typeof dtRaw === "string") {
           dt = dtRaw.slice(0,10);
         }
+        // Campos abaixo viram null quando a célula está vazia — null significa
+        // "planilha não trouxe essa informação" e é tratado em handleImport:
+        // numa atualização, preserva o valor já persistido; numa issue nova,
+        // aplica o padrão (ver NEW_ROW_DEFAULTS).
         issues.push({
           id:   Number(cell(r,"id")) || 0,
           n:    String(cell(r,"n") || "").trim(),
-          cat:  String(cell(r,"cat") || "").trim(),
-          cl:   String(cell(r,"cl") || "").trim(),
-          prod: String(cell(r,"prod") || "Teknisa HCM").trim(),
+          cat:  String(cell(r,"cat") || "").trim() || null,
+          cl:   String(cell(r,"cl") || "").trim() || null,
+          prod: String(cell(r,"prod") || "").trim() || null,
           est:  String(cell(r,"est") || "").trim() || null,
-          st:   String(cell(r,"st") || "Backlog").trim(),
-          dt,
+          st:   String(cell(r,"st") || "").trim() || null,
+          dt:   dt || null,
           rm:   Number(cell(r,"rm")) || 0,
           mc:   Number(cell(r,"mc")) || 0,
           val:  Number(cell(r,"val")) || 0,
           imp:  parseImpeditivaCell(cell(r,"imp")),
           desc: String(cell(r,"desc") || "").trim() || null,
-          curva: "B",
+          curva: null,
         });
       }
       resolve(issues.filter(x => x.id > 0 && x.n));
@@ -2429,20 +2437,23 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
   function handleImport() {
     if (preview.length === 0) return;
     const issues = preview.map(({ _op, ...iss }) => {
-      if (_op === "update") {
-        const existing = existingIssues.find(x => x.id === iss.id);
-        if (existing) {
-          return {
-            ...iss,
-            rm:  existing.rm  ? existing.rm  : iss.rm,
-            mc:  existing.mc  ? existing.mc  : iss.mc,
-            val: (existing.val != null && existing.val > 0) ? existing.val : iss.val,
-            // planilha sem indicativo de impeditiva (null) preserva o valor já persistido
-            imp: iss.imp === null ? (existing.imp ? 1 : 0) : (iss.imp ? 1 : 0),
-          };
-        }
+      const existing = _op === "update" ? existingIssues.find(x => x.id === iss.id) : null;
+      const merged = { ...iss };
+      // Célula vazia na planilha (null) não apaga informação: numa atualização,
+      // mantém o valor já persistido; numa issue nova, aplica o padrão.
+      for (const f of BLANK_PRESERVE_FIELDS) {
+        if (merged[f] == null) merged[f] = existing ? existing[f] : (NEW_ROW_DEFAULTS[f] ?? null);
       }
-      return { ...iss, imp: iss.imp ? 1 : 0 };
+      if (existing) {
+        merged.rm  = existing.rm  ? existing.rm  : iss.rm;
+        merged.mc  = existing.mc  ? existing.mc  : iss.mc;
+        merged.val = (existing.val != null && existing.val > 0) ? existing.val : iss.val;
+        // planilha sem indicativo de impeditiva (null) preserva o valor já persistido
+        merged.imp = iss.imp === null ? (existing.imp ? 1 : 0) : (iss.imp ? 1 : 0);
+      } else {
+        merged.imp = iss.imp ? 1 : 0;
+      }
+      return merged;
     });
     onSave(issues);
     onClose();
