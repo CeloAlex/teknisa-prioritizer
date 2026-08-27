@@ -88,7 +88,7 @@ function daysSince(dateStr) {
 
 // ── MOTOR DE SCORE ────────────────────────────────────────────────────────────
 function computeScore(issue, client) {
-  const curva = client ? client.cv : (issue.curva || "B");
+  const curva = client ? client.cv : (issue.curva || null);
   const cvOrd = CURVE_ORDER[curva] ?? 4;
   const isTeknisa = normName(issue.cl).includes("teknisa");
   const isRoadmap = issue.rm === 1;
@@ -269,7 +269,7 @@ function getFieldValue(enrichedIssue, crit) {
     }
   } else {
     const c = enrichedIssue._client;
-    if (!c) return 0;
+    if (!c) return atributo === "curva" ? null : 0;
     switch (atributo) {
       case "curva":          return CURVE_ORDER[c.cv] ?? 9;
       case "faturamento":    return c.fat ?? 0;
@@ -848,7 +848,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
 
   const enriched = useMemo(() => issuesData.map(issue => {
     const client = findClient(issue.cl, clientsData, deparaData);
-    const curva  = client ? client.cv : (issue.curva || "B");
+    const curva  = client ? client.cv : (issue.curva || null);
     const sc     = computeScore(issue, client);
     return { ...issue, _client:client, _curva:curva, _sc:sc };
   }), [issuesData, clientsData, deparaData]);
@@ -1308,7 +1308,7 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
         {rank && <span style={{ fontSize:11, color:"var(--color-text-tertiary)", minWidth:26, fontWeight:500 }}>#{rank}</span>}
         <span style={{ fontSize:11, color:"var(--color-text-tertiary)", whiteSpace:"nowrap", flexShrink:0 }}>#{issue.id}</span>
         <span style={{ background:gs.bg, color:gs.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, whiteSpace:"nowrap", border:`0.5px solid ${gs.border}44`, flexShrink:0 }}>{gs.label}</span>
-        <span style={{ background:cb.bg, color:cb.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, border:`0.5px solid ${cb.border}44`, flexShrink:0 }}>Curva {issue._curva}</span>
+        <span style={{ background:cb.bg, color:cb.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, border:`0.5px solid ${cb.border}44`, flexShrink:0 }}>{issue._curva ? `Curva ${issue._curva}` : "Sem classificação"}</span>
         {issue.imp === 1 && <span style={{ background:"#FFF7ED", color:"#92400E", border:"0.5px solid #FCD34D88", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, flexShrink:0 }}>⛔ Impeditiva</span>}
         <span style={{ fontSize:13, fontWeight:500, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{issue.n}</span>
         <span style={{ fontSize:12, color:"var(--color-text-secondary)", whiteSpace:"nowrap", flexShrink:0 }}>{issue.cl}</span>
@@ -2055,7 +2055,7 @@ function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReor
                     {issue.imp === 1 && <span style={{ marginLeft:4, background:"#FFF7ED", color:"#92400E", border:"0.5px solid #FCD34D88", borderRadius:4, padding:"1px 5px", fontSize:10 }}>Impeditiva</span>}
                   </div>
                   <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", color:"var(--color-text-secondary)" }}>{issue.cl}</span>
-                  <span style={{ background:cb.bg, color:cb.color, border:`0.5px solid ${cb.border}44`, borderRadius:5, padding:"2px 7px", fontSize:11, fontWeight:500, textAlign:"center" }}>Curva {issue._curva}</span>
+                  <span style={{ background:cb.bg, color:cb.color, border:`0.5px solid ${cb.border}44`, borderRadius:5, padding:"2px 7px", fontSize:11, fontWeight:500, textAlign:"center" }}>{issue._curva ? `Curva ${issue._curva}` : "Sem classificação"}</span>
                 </div>
               );
             })}
