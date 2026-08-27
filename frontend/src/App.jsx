@@ -26,7 +26,7 @@ function appIssueToApi(i) {
     produto: i.prod ?? null, estrutura: i.est ?? null, status: i.st ?? null, dataAbertura: i.dt ?? null,
     roadmap: i.rm, atendeMultiplos: i.mc, valor: i.val ?? null,
     curva: i.curva ?? null, observacao: i.ob ?? null, descricao: i.desc ?? null,
-    impeditiva: !!i.imp,
+    impeditiva: i.imp == null ? null : !!i.imp,
     aprovacao: i.ap ?? null, motivoReprovacao: i.mr ?? null,
   }
 }
@@ -606,10 +606,6 @@ const ISSUE_HEADER_ALIASES = {
   imp:       ["impeditiva"],
   desc:      ["descricao"],
 };
-// Campos que, quando vêm vazios da planilha (null), não devem apagar dado já
-// existente ao atualizar uma issue — só entram com um padrão quando a issue é nova.
-const BLANK_PRESERVE_FIELDS = ["cat", "cl", "prod", "st", "dt", "desc", "est", "curva"];
-const NEW_ROW_DEFAULTS = { prod: "Teknisa HCM", st: "Backlog", curva: "B" };
 function normHeader(s) {
   return String(s || "").toLowerCase().normalize("NFD").replace(DIACRITICS_RE,"").replace(/\s+/g," ").trim();
 }
@@ -652,9 +648,9 @@ function parseIssueSheet(arrayBuffer) {
           dt = dtRaw.slice(0,10);
         }
         // Campos abaixo viram null quando a célula está vazia — null significa
-        // "planilha não trouxe essa informação" e é tratado em handleImport:
+        // "planilha não trouxe essa informação" — o backend (upsertIssue) trata:
         // numa atualização, preserva o valor já persistido; numa issue nova,
-        // aplica o padrão (ver NEW_ROW_DEFAULTS).
+        // aplica o padrão.
         issues.push({
           id:   Number(cell(r,"id")) || 0,
           n:    String(cell(r,"n") || "").trim(),
@@ -664,9 +660,9 @@ function parseIssueSheet(arrayBuffer) {
           est:  String(cell(r,"est") || "").trim() || null,
           st:   String(cell(r,"st") || "").trim() || null,
           dt:   dt || null,
-          rm:   Number(cell(r,"rm")) || 0,
-          mc:   Number(cell(r,"mc")) || 0,
-          val:  Number(cell(r,"val")) || 0,
+          rm:   cell(r,"rm")  === "" ? null : (Number(cell(r,"rm"))  || 0),
+          mc:   cell(r,"mc")  === "" ? null : (Number(cell(r,"mc"))  || 0),
+          val:  cell(r,"val") === "" ? null : (Number(cell(r,"val")) || 0),
           imp:  parseImpeditivaCell(cell(r,"imp")),
           desc: String(cell(r,"desc") || "").trim() || null,
           curva: null,
@@ -717,14 +713,17 @@ function parseClientSheet(arrayBuffer) {
           } else if (typeof acRaw === "string") {
             ac = acRaw.slice(0,10);
           }
+          // Célula vazia vira null ("não informado"): o backend (upsertClient) preserva
+          // o valor já persistido numa atualização e só aplica um padrão ao criar um
+          // cliente novo — mesmo contrato usado pela planilha de issues e pela API.
           clients.push({
             n:      String(r[0] || "").trim(),
-            ac,
-            fat:    Number(r[2]) || 0,
-            tp:     String(r[3] || "REAL").trim().toUpperCase(),
-            cv:     String(r[4] || "B").trim().toUpperCase(),
-            ch:     Number(r[5]) || 0,
-            pr:     Number(r[6]) || 0,
+            ac:     ac || null,
+            fat:    r[2] === "" ? null : (Number(r[2]) || 0),
+            tp:     String(r[3] || "").trim().toUpperCase() || null,
+            cv:     String(r[4] || "").trim().toUpperCase() || null,
+            ch:     r[5] === "" ? null : (Number(r[5]) || 0),
+            pr:     r[6] === "" ? null : (Number(r[6]) || 0),
             codigo: String(r[7] || "").trim() || null,
           });
         }
@@ -909,21 +908,16 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     setIssuesData(fresh.map(apiIssueToApp))
   }
   async function handleAddClients(clients) {
-    await Promise.allSettled(
-      clients.map(c => apiFetch(API + "/clients", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(appClientToApi(c)),
-      }))
-    )
-    setClientsData(prev => {
-      let next = [...prev];
-      for (const client of clients) {
-        const idx = next.findIndex(x => normName(x.n) === normName(client.n));
-        if (idx >= 0) next[idx] = { ...next[idx], ...client };
-        else next = [client, ...next];
-      }
-      return next;
-    });
+    const res = await apiFetch(API + "/clients/bulk", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clients: clients.map(appClientToApi) }),
+    })
+    const result = await res.json()
+    if (result?.failed?.length) {
+      alert(`${result.failed.length} de ${result.total} cliente(s) não foram salvos: ${result.failed.map(f => f.nome).join(', ')}`)
+    }
+    const fresh = await apiFetch(API + '/clients').then(r => r.json())
+    setClientsData(fresh.map(apiClientToApp))
   }
 
   async function handleSaveFatSeg(clienteId, segmentoId, valor) {
@@ -2458,32 +2452,16 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
 
   function handleManualSave() {
     if (!form.id || !form.n || !form.cl) return setError("ID, nome e cliente são obrigatórios.");
-    onSave([{ ...form, id:Number(form.id), rm:Number(form.rm), mc:Number(form.mc), imp:Number(form.imp), val:Number(form.val), curva:"B" }]);
+    onSave([{ ...form, id:Number(form.id), rm:Number(form.rm), mc:Number(form.mc), imp:Number(form.imp), val:Number(form.val), curva:null }]);
     onClose();
   }
 
+  // Célula vazia na planilha (null) não apaga informação já persistida: o backend
+  // (upsertIssue) preserva o valor existente numa atualização e aplica o padrão
+  // só ao criar uma issue nova — mesmo contrato usado pela API de integração.
   function handleImport() {
     if (preview.length === 0) return;
-    const issues = preview.map(({ _op, ...iss }) => {
-      const existing = _op === "update" ? existingIssues.find(x => x.id === iss.id) : null;
-      const merged = { ...iss };
-      // Célula vazia na planilha (null) não apaga informação: numa atualização,
-      // mantém o valor já persistido; numa issue nova, aplica o padrão.
-      for (const f of BLANK_PRESERVE_FIELDS) {
-        if (merged[f] == null) merged[f] = existing ? existing[f] : (NEW_ROW_DEFAULTS[f] ?? null);
-      }
-      if (existing) {
-        merged.rm  = existing.rm  ? existing.rm  : iss.rm;
-        merged.mc  = existing.mc  ? existing.mc  : iss.mc;
-        merged.val = (existing.val != null && existing.val > 0) ? existing.val : iss.val;
-        // planilha sem indicativo de impeditiva (null) preserva o valor já persistido
-        merged.imp = iss.imp === null ? (existing.imp ? 1 : 0) : (iss.imp ? 1 : 0);
-      } else {
-        merged.imp = iss.imp ? 1 : 0;
-      }
-      return merged;
-    });
-    onSave(issues);
+    onSave(preview.map(({ _op, ...iss }) => iss));
     onClose();
   }
 

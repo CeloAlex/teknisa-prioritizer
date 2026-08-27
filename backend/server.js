@@ -24,6 +24,16 @@ if (!JWT_SECRET) {
   process.exit(1)
 }
 
+// Autenticação alternativa para integrações externas (webservice de importação):
+// uma chave fixa enviada no header X-API-Key, sem necessidade de login de operador.
+const INTEGRATION_API_KEY = process.env.INTEGRATION_API_KEY || null
+if (!INTEGRATION_API_KEY) {
+  console.warn('INTEGRATION_API_KEY não definida — a API de importação (X-API-Key) ficará desabilitada até ser configurada.')
+}
+const INTEGRATION_OPERADOR = {
+  id: -1, nome: 'Integração API', email: 'integracao@api', papel: 'ADMIN', ativo: true, segmentos: [],
+}
+
 const dbUrl = process.env.DB_URL || process.env.DATABASE_URL
 console.log('DB_URL definida:', !!dbUrl, dbUrl ? '(primeiros 30 chars: ' + dbUrl.slice(0, 30) + '...)' : '(VAZIA/INDEFINIDA)')
 const dbKeys = Object.keys(process.env).filter(k => /database|db|pg|postgres|railway/i.test(k))
@@ -123,6 +133,15 @@ function serializeOperador(operador) {
 app.addHook('preHandler', async (req, reply) => {
   if (!req.url.startsWith('/api')) return
   if (PUBLIC_ROUTES.has(req.url.split('?')[0])) return
+
+  const apiKeyHeader = req.headers['x-api-key']
+  if (apiKeyHeader) {
+    if (!INTEGRATION_API_KEY || apiKeyHeader !== INTEGRATION_API_KEY) {
+      return reply.status(401).send({ error: 'API key inválida' })
+    }
+    req.operador = INTEGRATION_OPERADOR
+    return
+  }
 
   const header = req.headers.authorization || ''
   const token  = header.startsWith('Bearer ') ? header.slice(7) : null
@@ -398,7 +417,29 @@ app.get('/api/issues', async (req) => {
   return enriched.filter(i => i.segmento && allowedSegmentos.has(i.segmento))
 })
 
-async function upsertIssue(data) {
+// Contrato de merge compartilhado por planilha de issues, planilha de clientes e
+// pela API de integração: um campo AUSENTE ou null no payload significa "não
+// informado" — numa atualização preserva o valor já salvo; numa criação aplica o
+// default (quando houver). Qualquer valor explícito, incluindo 0/false/"",
+// sempre sobrescreve.
+function mergeStr(incoming, existingVal, isUpdate, defaultVal = null) {
+  if (incoming !== undefined && incoming !== null) return incoming
+  return isUpdate ? (existingVal ?? null) : defaultVal
+}
+function mergeBool(incoming, existingVal, isUpdate, defaultVal = false) {
+  if (incoming !== undefined && incoming !== null) return Boolean(incoming)
+  return isUpdate ? Boolean(existingVal) : defaultVal
+}
+function mergeNum(incoming, existingVal, isUpdate, defaultVal = null) {
+  if (incoming !== undefined && incoming !== null) return Number(incoming)
+  return isUpdate ? (existingVal ?? null) : defaultVal
+}
+function mergeDate(incoming, existingVal, isUpdate) {
+  if (incoming !== undefined && incoming !== null) return new Date(incoming)
+  return isUpdate ? existingVal : null
+}
+
+async function upsertIssue(data, existingMap) {
   const { id, nome, categoria, cliente, produto, estrutura, status, dataAbertura,
           roadmap, atendeMultiplos, valor, curva, observacao, descricao, impeditiva,
           aprovacao, motivoReprovacao, segmentoId } = data
@@ -406,6 +447,9 @@ async function upsertIssue(data) {
   if (!id || !nome) {
     throw Object.assign(new Error('id e nome são obrigatórios'), { statusCode: 400 })
   }
+  const issueId = Number(id)
+  const existing = existingMap ? (existingMap.get(issueId) ?? null) : await prisma.issue.findUnique({ where: { id: issueId } })
+  const isUpdate = !!existing
 
   if (produto && segmentoId) {
     await prisma.produto.upsert({
@@ -424,20 +468,29 @@ async function upsertIssue(data) {
   }
 
   const commonFields = {
-    nome, categoria, cliente, produto, estrutura: estrutura ?? null, status,
-    dataAbertura: dataAbertura ? new Date(dataAbertura) : null,
-    roadmap: Boolean(roadmap), atendeMultiplos: Boolean(atendeMultiplos),
-    valor: valor != null ? Number(valor) : null, curva, observacao,
-    descricao: descricao ?? null,
-    impeditiva: impeditiva != null ? Boolean(impeditiva) : false,
-    aprovacao: aprovacao ?? null,
-    motivoReprovacao: motivoReprovacao ?? null,
+    nome,
+    categoria:        mergeStr(categoria, existing?.categoria, isUpdate),
+    cliente:          mergeStr(cliente, existing?.cliente, isUpdate),
+    produto:          mergeStr(produto, existing?.produto, isUpdate, 'Teknisa HCM'),
+    estrutura:        mergeStr(estrutura, existing?.estrutura, isUpdate),
+    status:           mergeStr(status, existing?.status, isUpdate, 'Backlog'),
+    dataAbertura:     mergeDate(dataAbertura, existing?.dataAbertura, isUpdate),
+    roadmap:          mergeBool(roadmap, existing?.roadmap, isUpdate),
+    atendeMultiplos:  mergeBool(atendeMultiplos, existing?.atendeMultiplos, isUpdate),
+    valor:            mergeNum(valor, existing?.valor, isUpdate),
+    // Sem default: issue nova sem curva informada e sem cliente casado nasce "sem classificação".
+    curva:            mergeStr(curva, existing?.curva, isUpdate),
+    observacao:       mergeStr(observacao, existing?.observacao, isUpdate),
+    descricao:        mergeStr(descricao, existing?.descricao, isUpdate),
+    impeditiva:       mergeBool(impeditiva, existing?.impeditiva, isUpdate),
+    aprovacao:        mergeStr(aprovacao, existing?.aprovacao, isUpdate),
+    motivoReprovacao: mergeStr(motivoReprovacao, existing?.motivoReprovacao, isUpdate),
   }
 
   return prisma.issue.upsert({
-    where:  { id: Number(id) },
+    where:  { id: issueId },
     update: commonFields,
-    create: { id: Number(id), ...commonFields },
+    create: { id: issueId, ...commonFields },
   })
 }
 
@@ -461,10 +514,14 @@ app.post('/api/issues/bulk', async (req, reply) => {
     return reply.status(400).send({ error: 'issues é obrigatório' })
   }
 
+  const ids = issues.map(i => Number(i.id)).filter(n => Number.isFinite(n) && n > 0)
+  const existingIssues = await prisma.issue.findMany({ where: { id: { in: ids } } })
+  const existingMap = new Map(existingIssues.map(i => [i.id, i]))
+
   const failed = []
   for (const item of issues) {
     try {
-      await upsertIssue({ ...item, segmentoId })
+      await upsertIssue({ ...item, segmentoId }, existingMap)
     } catch (e) {
       failed.push({ id: item.id, error: e.message })
     }
@@ -503,36 +560,76 @@ app.get('/api/clients', async (req) => {
   return clients.map(({ faturamento, faturamentoSegmentos, ...rest }) => rest)
 })
 
-app.post('/api/clients', async (req, reply) => {
-  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
-  const { nome, aceite, faturamento, tipo, curva, riscoChurn, projeto, codigo } = req.body
+async function upsertClient(data, existingMap, operadorPapel) {
+  const { nome, aceite, faturamento, tipo, curva, riscoChurn, projeto, codigo } = data
 
   if (!nome) {
-    return reply.status(400).send({ error: 'nome é obrigatório' })
+    throw Object.assign(new Error('nome é obrigatório'), { statusCode: 400 })
   }
+
+  const existing = existingMap ? (existingMap.get(nome) ?? null) : await prisma.client.findUnique({ where: { nome } })
+  const isUpdate = !!existing
 
   const baseFields = {
-    aceite: aceite ? new Date(aceite) : null,
-    tipo, curva, riscoChurn: Boolean(riscoChurn), projeto: Boolean(projeto),
-    codigo: codigo ?? null,
+    aceite:     mergeDate(aceite, existing?.aceite, isUpdate),
+    tipo:       mergeStr(tipo, existing?.tipo, isUpdate, 'REAL'),
+    curva:      mergeStr(curva, existing?.curva, isUpdate, 'B'),
+    riscoChurn: mergeBool(riscoChurn, existing?.riscoChurn, isUpdate),
+    projeto:    mergeBool(projeto, existing?.projeto, isUpdate),
+    codigo:     mergeStr(codigo, existing?.codigo, isUpdate),
   }
   // Faturamento só pode ser definido/alterado por Administrador — nunca sobrescrito por Editor.
-  if (req.operador.papel === 'ADMIN') {
-    baseFields.faturamento = faturamento != null ? Number(faturamento) : null
+  if (operadorPapel === 'ADMIN') {
+    baseFields.faturamento = mergeNum(faturamento, existing?.faturamento, isUpdate)
   }
 
-  const client = await prisma.client.upsert({
+  return prisma.client.upsert({
     where:  { nome },
     update: baseFields,
     create: { nome, ...baseFields, faturamento: baseFields.faturamento ?? null, qtdImpeditivas: 0 },
     include: { faturamentoSegmentos: true },
   })
+}
+
+app.post('/api/clients', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+  let client
+  try {
+    client = await upsertClient(req.body, null, req.operador.papel)
+  } catch (e) {
+    if (e.statusCode) return reply.status(e.statusCode).send({ error: e.message })
+    throw e
+  }
   if (req.operador.papel !== 'ADMIN') {
     const { faturamento: _f, faturamentoSegmentos: _fs, ...safe } = client
     return safe
   }
-
   return client
+})
+
+// Importação em lote: mesmo racional do /api/issues/bulk — processa sequencialmente
+// num único request para não esgotar o pool de conexões com N requisições concorrentes.
+app.post('/api/clients/bulk', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+  const { clients } = req.body
+  if (!Array.isArray(clients) || clients.length === 0) {
+    return reply.status(400).send({ error: 'clients é obrigatório' })
+  }
+
+  const names = clients.map(c => c.nome).filter(Boolean)
+  const existingClients = await prisma.client.findMany({ where: { nome: { in: names } } })
+  const existingMap = new Map(existingClients.map(c => [c.nome, c]))
+
+  const failed = []
+  for (const item of clients) {
+    try {
+      await upsertClient(item, existingMap, req.operador.papel)
+    } catch (e) {
+      failed.push({ nome: item.nome, error: e.message })
+    }
+  }
+
+  return { total: clients.length, succeeded: clients.length - failed.length, failed }
 })
 
 // ── Faturamento por Segmento ─────────────────────────────────────────────────
