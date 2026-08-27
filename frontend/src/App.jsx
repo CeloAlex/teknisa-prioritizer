@@ -786,7 +786,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   const [issuesData, setIssuesData] = useState([]);
   const [clientsData, setClientsData] = useState([]);
   const [deparaData, setDeparaData]   = useState([]);
-  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], search:"" });
+  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], search:"", dataAberturaDe:"", dataAberturaAte:"" });
   const [showDone, setShowDone]     = useState(false);
   const [importModal, setImportModal] = useState(null); // "issue" | "client" | null
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -872,6 +872,8 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
       if (filters.estrutura.length && !filters.estrutura.includes(issue.est)) return false;
       if (filters.segmento.length  && !filters.segmento.includes(issue.seg))  return false;
       if (filters.aprovacao.length && !filters.aprovacao.includes(issue.ap ?? "(Não analisado)")) return false;
+      if (filters.dataAberturaDe  && (!issue.dt || issue.dt < filters.dataAberturaDe))  return false;
+      if (filters.dataAberturaAte && (!issue.dt || issue.dt > filters.dataAberturaAte)) return false;
       if (filters.search) {
         const q = normName(filters.search);
         if (!normName(issue.n).includes(q) && !normName(issue.cl).includes(q) && !String(issue.id).includes(q)) return false;
@@ -1064,7 +1066,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     setParametrosLLM(saved);
   }
 
-  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.search;
+  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.search || filters.dataAberturaDe || filters.dataAberturaAte;
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'100vh', fontFamily:'system-ui,sans-serif', gap:12 }}>
@@ -1425,7 +1427,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             </button>
           )}
           {hasFilters && (
-            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], search:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
+            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], search:"", dataAberturaDe:"", dataAberturaAte:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
               <i className="ti ti-x" style={{ fontSize:13 }} aria-hidden /> Limpar
             </button>
           )}
@@ -1478,6 +1480,30 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             selected={filters.aprovacao}
             onChange={v => sf("aprovacao", v)}
           />
+          <div style={{ display:"flex", alignItems:"center", gap:6, flex:"1 1 260px", minWidth:0 }}>
+            <span style={{ fontSize:12, color:"var(--color-text-tertiary)", whiteSpace:"nowrap" }}>Abertura de</span>
+            <input
+              type="date"
+              value={filters.dataAberturaDe}
+              onChange={e => sf("dataAberturaDe", e.target.value)}
+              style={{
+                background:"var(--color-background-secondary)",
+                border:"0.5px solid var(--color-border-secondary)",
+                borderRadius:8, padding:"7px 10px", fontSize:13, flex:1, minWidth:0,
+              }}
+            />
+            <span style={{ fontSize:12, color:"var(--color-text-tertiary)", whiteSpace:"nowrap" }}>até</span>
+            <input
+              type="date"
+              value={filters.dataAberturaAte}
+              onChange={e => sf("dataAberturaAte", e.target.value)}
+              style={{
+                background:"var(--color-background-secondary)",
+                border:"0.5px solid var(--color-border-secondary)",
+                borderRadius:8, padding:"7px 10px", fontSize:13, flex:1, minWidth:0,
+              }}
+            />
+          </div>
         </div>
         {/* Tags de filtros ativos */}
         {hasFilters && (
@@ -1489,6 +1515,8 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             {filters.estrutura.map(v => <FilterTag key={v} label={v} onRemove={() => sf("estrutura", filters.estrutura.filter(x=>x!==v))} />)}
             {filters.segmento.map(v => <FilterTag key={v} label={`Segmento: ${v}`} onRemove={() => sf("segmento", filters.segmento.filter(x=>x!==v))} />)}
             {filters.aprovacao.map(v => <FilterTag key={v} label={`Aprovação: ${v}`} onRemove={() => sf("aprovacao", filters.aprovacao.filter(x=>x!==v))} />)}
+            {filters.dataAberturaDe && <FilterTag label={`Abertura de: ${filters.dataAberturaDe}`} onRemove={() => sf("dataAberturaDe","")} />}
+            {filters.dataAberturaAte && <FilterTag label={`Abertura até: ${filters.dataAberturaAte}`} onRemove={() => sf("dataAberturaAte","")} />}
             {filters.search && <FilterTag label={`"${filters.search}"`} onRemove={() => sf("search","")} />}
           </div>
         )}
