@@ -25,7 +25,7 @@ function appIssueToApi(i) {
     id: i.id, nome: i.n, categoria: i.cat ?? null, cliente: i.cl ?? null,
     produto: i.prod ?? null, estrutura: i.est ?? null, status: i.st ?? null, dataAbertura: i.dt ?? null,
     roadmap: i.rm, atendeMultiplos: i.mc, valor: i.val ?? null,
-    curva: i.curva ?? null, observacao: i.ob ?? null, descricao: i.desc ?? null,
+    curva: i.curva ?? null, sprint: i.sp ?? null, observacao: i.ob ?? null, descricao: i.desc ?? null,
     impeditiva: i.imp == null ? null : !!i.imp,
     aprovacao: i.ap ?? null, motivoReprovacao: i.mr ?? null,
   }
@@ -35,7 +35,7 @@ function apiIssueToApp(i) {
     id: i.id, n: i.nome, cat: i.categoria, cl: i.cliente, prod: i.produto, est: i.estrutura,
     st: i.status, dt: i.dataAbertura ? i.dataAbertura.slice(0, 10) : null,
     rm: i.roadmap ? 1 : 0, mc: i.atendeMultiplos ? 1 : 0,
-    val: i.valor, curva: i.curva, ob: i.observacao, desc: i.descricao,
+    val: i.valor, curva: i.curva, sp: i.sprint ?? null, ob: i.observacao, desc: i.descricao,
     seg: i.segmento ?? null, segOrd: i.segmentoOrdem ?? 999,
     imp: i.impeditiva ? 1 : 0,
     ap: i.aprovacao ?? null, mr: i.motivoReprovacao ?? null,
@@ -605,6 +605,7 @@ const ISSUE_HEADER_ALIASES = {
   val:       ["valor"],
   imp:       ["impeditiva"],
   desc:      ["descricao"],
+  sp:        ["sprint"],
 };
 function normHeader(s) {
   return String(s || "").toLowerCase().normalize("NFD").replace(DIACRITICS_RE,"").replace(/\s+/g," ").trim();
@@ -666,6 +667,7 @@ function parseIssueSheet(arrayBuffer) {
           imp:  parseImpeditivaCell(cell(r,"imp")),
           desc: String(cell(r,"desc") || "").trim() || null,
           curva: null,
+          sp:   String(cell(r,"sp") || "").trim().slice(0,50) || null,
         });
       }
       resolve(issues.filter(x => x.id > 0 && x.n));
@@ -677,14 +679,14 @@ function parseIssueSheet(arrayBuffer) {
 function downloadIssueTemplate() {
   const header = [
     "Id", "Nome", "Categoria", "Cliente", "Produto", "Status",
-    "Data Abertura", "Roadmap", "Atende +1", "Valor", "Impeditiva", "Descrição", "Estrutura do Produto",
+    "Data Abertura", "Roadmap", "Atende +1", "Valor", "Impeditiva", "Descrição", "Estrutura do Produto", "Sprint",
   ];
   const exemplo = [
     101, "Erro no cálculo de férias", "Erro - prioridade alta", "Cliente Exemplo",
-    "Teknisa HCM", "Backlog", "01/03/2026", 0, 1, 5000, "Sim", "Descrição da issue", "Folha",
+    "Teknisa HCM", "Backlog", "01/03/2026", 0, 1, 5000, "Sim", "Descrição da issue", "Folha", "HCM36",
   ];
   const ws = XLSX.utils.aoa_to_sheet([header, exemplo]);
-  ws["!cols"] = [6,30,22,18,16,12,16,10,10,12,32,30,22].map(wch => ({ wch }));
+  ws["!cols"] = [6,30,22,18,16,12,16,10,10,12,32,30,22,14].map(wch => ({ wch }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Issues");
   XLSX.writeFile(wb, "modelo_importacao_issues.xlsx");
@@ -785,12 +787,14 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   const [issuesData, setIssuesData] = useState([]);
   const [clientsData, setClientsData] = useState([]);
   const [deparaData, setDeparaData]   = useState([]);
-  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], search:"", dataAberturaDe:"", dataAberturaAte:"" });
+  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], search:"", dataAberturaDe:"", dataAberturaAte:"" });
   const [showDone, setShowDone]     = useState(false);
   const [importModal, setImportModal] = useState(null); // "issue" | "client" | null
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [confirmDelete, setConfirmDelete]         = useState(false);
   const [impdConfirm, setImpdConfirm]             = useState(false);
+  const [sprintModal, setSprintModal]             = useState(false);
+  const [sprintModalValue, setSprintModalValue]   = useState("");
   const [loading, setLoading]            = useState(true);
   const [criteriaData, setCriteriaData]    = useState([]);
   const [segmentosData, setSegmentosData]  = useState([]);
@@ -862,6 +866,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   function applyFilters(list, especOnly = false) {
     return list.filter(issue => {
       if (especOnly && issue.st !== "Especificação") return false;
+      if (!especOnly && issue.st === "Especificação") return false;
       if (showDone  && !isDone(issue.st)) return false;
       if (!showDone &&  isDone(issue.st)) return false;
       if (filters.status.length    && !filters.status.includes(issue.st))     return false;
@@ -871,6 +876,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
       if (filters.estrutura.length && !filters.estrutura.includes(issue.est)) return false;
       if (filters.segmento.length  && !filters.segmento.includes(issue.seg))  return false;
       if (filters.aprovacao.length && !filters.aprovacao.includes(issue.ap ?? "(Não analisado)")) return false;
+      if (filters.sprint.length    && !filters.sprint.includes(issue.sp || "(Sem sprint)")) return false;
       if (filters.dataAberturaDe  && (!issue.dt || issue.dt < filters.dataAberturaDe))  return false;
       if (filters.dataAberturaAte && (!issue.dt || issue.dt > filters.dataAberturaAte)) return false;
       if (filters.search) {
@@ -976,6 +982,15 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     setSelectedIds(new Set());
     apiFetch(API + '/clients').then(r => r.json()).then(cl => setClientsData(cl.map(apiClientToApp))).catch(() => {});
   }
+  async function handleSetSprint(ids, sprint) {
+    const value = sprint.trim().slice(0, 50) || null;
+    await apiFetch(API + '/issues/bulk-sprint', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [...ids], sprint: value }),
+    });
+    setIssuesData(prev => prev.map(x => ids.has(x.id) ? { ...x, sp: value } : x));
+    setSelectedIds(new Set());
+  }
 
   async function handleToggleCriterio(id) {
     const crit = criteriaData.find(c => c.id === id);
@@ -1060,7 +1075,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     setParametrosLLM(saved);
   }
 
-  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.search || filters.dataAberturaDe || filters.dataAberturaAte;
+  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.sprint.length || filters.search || filters.dataAberturaDe || filters.dataAberturaAte;
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'100vh', fontFamily:'system-ui,sans-serif', gap:12 }}>
@@ -1102,6 +1117,9 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
           </div>
           <div style={{ display:"flex", gap:8, alignItems:"center" }}>
             {canEdit && selectedIds.size > 0 && (<>
+              <button onClick={() => { setSprintModalValue(""); setSprintModal(true); }} style={{ fontSize:12, padding:"6px 14px", display:"flex", alignItems:"center", gap:6, background:"#E6F1FB", color:"#0C447C", border:"0.5px solid #185FA544" }}>
+                <i className="ti ti-run" style={{ fontSize:14 }} aria-hidden /> Sprint ({selectedIds.size})
+              </button>
               <button onClick={() => setImpdConfirm(true)} style={{ fontSize:12, padding:"6px 14px", display:"flex", alignItems:"center", gap:6, background:"#FFF7ED", color:"#92400E", border:"0.5px solid #FCD34D88" }}>
                 <i className="ti ti-ban" style={{ fontSize:14 }} aria-hidden /> Impeditiva ({selectedIds.size})
               </button>
@@ -1150,7 +1168,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
 
       <div style={{ padding:"24px", maxWidth:1280, margin:"0 auto" }}>
         {tab==="dashboard"    && <DashboardTab stats={stats} issues={sorted} enriched={segmentEnriched} criteriaData={criteriaData} segmento={selectedSegmento} isAdmin={isAdmin} />}
-        {tab==="issues"       && <IssuesTab issues={filteredIssues} allIssues={sorted} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={canEdit ? selectedIds : undefined} toggleSelect={canEdit ? toggleSelect : undefined} toggleSelectAll={canEdit ? toggleSelectAll : undefined} onEditSave={handleAddIssues} canEdit={canEdit} isAdmin={isAdmin} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
+        {tab==="issues"       && <IssuesTab issues={filteredIssues} allIssues={sorted.filter(x=>x.st!=="Especificação")} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={canEdit ? selectedIds : undefined} toggleSelect={canEdit ? toggleSelect : undefined} toggleSelectAll={canEdit ? toggleSelectAll : undefined} onEditSave={handleAddIssues} canEdit={canEdit} isAdmin={isAdmin} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
         {tab==="especificacao"&& <IssuesTab issues={filteredEspec}  allIssues={sorted.filter(x=>x.st==="Especificação")} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={canEdit ? selectedIds : undefined} toggleSelect={canEdit ? toggleSelect : undefined} toggleSelectAll={canEdit ? toggleSelectAll : undefined} especMode onEditSave={handleAddIssues} canEdit={canEdit} isAdmin={isAdmin} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} especificacoesExistentes={especificacoesExistentes} onEspecificacaoGerada={marcarEspecificacaoGerada} />}
         {tab==="clientes"     && <ClientsTab clients={clientsData} onAddSingle={c => handleAddClients([c])} isAdmin={isAdmin} segmentosData={segmentosData} onSaveFatSeg={handleSaveFatSeg} onDeleteFatSeg={handleDeleteFatSeg} />}
         {tab==="criterios"    && <CriteriosTab criteriaData={criteriaData} issues={filteredIssues} onToggle={handleToggleCriterio} onSave={handleSaveCriterio} onDelete={handleDeleteCriterio} onReorder={handleReorderCriterio} />}
@@ -1172,6 +1190,33 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
               <button onClick={() => setConfirmDelete(false)} style={{ padding:"8px 20px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)", cursor:"pointer", fontSize:13, fontWeight:500 }}>Cancelar</button>
               <button onClick={() => { setConfirmDelete(false); handleDeleteSelected(); }} style={{ padding:"8px 20px", borderRadius:8, border:"none", background:"#A32D2D", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:500 }}>
                 Sim, excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {sprintModal && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:2000 }}>
+          <div style={{ background:"var(--color-background-primary)", borderRadius:16, border:"0.5px solid var(--color-border-tertiary)", padding:28, width:400, textAlign:"center" }}>
+            <div style={{ width:48, height:48, borderRadius:12, background:"#E6F1FB", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px" }}>
+              <i className="ti ti-run" style={{ fontSize:24, color:"#0C447C" }} />
+            </div>
+            <div style={{ fontWeight:500, fontSize:16, marginBottom:8 }}>Definir Sprint</div>
+            <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:16 }}>
+              Informe a sprint para as <strong>{selectedIds.size} issue{selectedIds.size > 1 ? "s" : ""}</strong> selecionadas. Deixe em branco para remover a sprint.
+            </div>
+            <input
+              autoFocus
+              value={sprintModalValue}
+              onChange={e => setSprintModalValue(e.target.value)}
+              maxLength={50}
+              placeholder="Ex.: HCM36"
+              style={{ width:"100%", boxSizing:"border-box", marginBottom:20, textAlign:"left" }}
+            />
+            <div style={{ display:"flex", gap:8, justifyContent:"center" }}>
+              <button onClick={() => setSprintModal(false)} style={{ padding:"8px 16px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)" }}>Cancelar</button>
+              <button onClick={() => { setSprintModal(false); handleSetSprint(selectedIds, sprintModalValue); }} style={{ padding:"8px 16px", borderRadius:8, background:"#0069FF", color:"#fff", fontWeight:600 }}>
+                <i className="ti ti-check" style={{ fontSize:13, marginRight:4 }} />Aplicar
               </button>
             </div>
           </div>
@@ -1304,6 +1349,7 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
         <span style={{ background:gs.bg, color:gs.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, whiteSpace:"nowrap", border:`0.5px solid ${gs.border}44`, flexShrink:0 }}>{gs.label}</span>
         <span style={{ background:cb.bg, color:cb.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, border:`0.5px solid ${cb.border}44`, flexShrink:0 }}>{issue._curva ? `Curva ${issue._curva}` : "Sem classificação"}</span>
         {issue.imp === 1 && <span style={{ background:"#FFF7ED", color:"#92400E", border:"0.5px solid #FCD34D88", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, flexShrink:0 }}>⛔ Impeditiva</span>}
+        {issue.sp && <span style={{ background:"#E6F1FB", color:"#0C447C", border:"0.5px solid #185FA544", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, whiteSpace:"nowrap", flexShrink:0 }}>{issue.sp}</span>}
         <span style={{ fontSize:13, fontWeight:500, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{issue.n}</span>
         <span style={{ fontSize:12, color:"var(--color-text-secondary)", whiteSpace:"nowrap", flexShrink:0 }}>{issue.cl}</span>
         <span style={{ fontSize:11, color:"var(--color-text-tertiary)", background:"var(--color-background-secondary)", borderRadius:4, padding:"1px 6px", whiteSpace:"nowrap", flexShrink:0 }}>{issue.st}</span>
@@ -1336,6 +1382,7 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
           <Field label="Produto"           value={issue.prod} />
           <Field label="Estrutura do Produto" value={issue.est} />
           <Field label="Data Abertura"     value={issue.dt} />
+          <Field label="Sprint"            value={issue.sp} />
           <Field label="Dias em aberto"    value={days+" dias"} color={days>180?"#E24B4A":days>90?"#BA7517":undefined} />
           <Field label="É Impeditiva"      value={issue.imp ? "Sim" : "Não"} color={issue.imp ? "#92400E" : undefined} />
           <Field label="Roadmap"           value={issue.rm ? "Sim" : "Não"} />
@@ -1396,6 +1443,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
   const allProdutos   = useMemo(() => [...new Set(issuesData.map(x => x.prod))].sort(), [issuesData]);
   const allEstruturas = useMemo(() => [...new Set(issuesData.map(x => x.est))].filter(Boolean).sort(), [issuesData]);
   const allSegmentos  = useMemo(() => (segmentosData ?? []).map(s => s.nome).sort(),    [segmentosData]);
+  const allSprints    = useMemo(() => [...new Set(issuesData.map(x => x.sp).filter(Boolean))].sort(), [issuesData]);
 
   return (
     <div>
@@ -1421,7 +1469,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             </button>
           )}
           {hasFilters && (
-            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], search:"", dataAberturaDe:"", dataAberturaAte:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
+            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], search:"", dataAberturaDe:"", dataAberturaAte:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
               <i className="ti ti-x" style={{ fontSize:13 }} aria-hidden /> Limpar
             </button>
           )}
@@ -1474,6 +1522,12 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             selected={filters.aprovacao}
             onChange={v => sf("aprovacao", v)}
           />
+          <MultiSelect
+            placeholder="Sprint (todas)"
+            options={[...allSprints, "(Sem sprint)"]}
+            selected={filters.sprint}
+            onChange={v => sf("sprint", v)}
+          />
           <div style={{ display:"flex", alignItems:"center", gap:6, flex:"1 1 260px", minWidth:0 }}>
             <span style={{ fontSize:12, color:"var(--color-text-tertiary)", whiteSpace:"nowrap" }}>Abertura de</span>
             <input
@@ -1509,6 +1563,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             {filters.estrutura.map(v => <FilterTag key={v} label={v} onRemove={() => sf("estrutura", filters.estrutura.filter(x=>x!==v))} />)}
             {filters.segmento.map(v => <FilterTag key={v} label={`Segmento: ${v}`} onRemove={() => sf("segmento", filters.segmento.filter(x=>x!==v))} />)}
             {filters.aprovacao.map(v => <FilterTag key={v} label={`Aprovação: ${v}`} onRemove={() => sf("aprovacao", filters.aprovacao.filter(x=>x!==v))} />)}
+            {filters.sprint.map(v => <FilterTag key={v} label={`Sprint: ${v}`} onRemove={() => sf("sprint", filters.sprint.filter(x=>x!==v))} />)}
             {filters.dataAberturaDe && <FilterTag label={`Abertura de: ${filters.dataAberturaDe}`} onRemove={() => sf("dataAberturaDe","")} />}
             {filters.dataAberturaAte && <FilterTag label={`Abertura até: ${filters.dataAberturaAte}`} onRemove={() => sf("dataAberturaAte","")} />}
             {filters.search && <FilterTag label={`"${filters.search}"`} onRemove={() => sf("search","")} />}
@@ -2504,7 +2559,7 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
               {[["A","Id (número)"],["B","Nome"],["C","Categoria"],["D","Cliente"],["E","Produto"],
                 ["F","Status"],["G","Data Abertura (DD/MM/AAAA)"],["H","Roadmap (0/1)"],["I","Atende +1 (0/1)"],["J","Valor (R$)"],
                 ["K","Impeditiva (Sim/Não, vazio = mantém valor atual)"],["L","Descrição"],
-                ["M","Estrutura do Produto (opcional)"]].map(([col,desc]) => (
+                ["M","Estrutura do Produto (opcional)"],["N","Sprint (opcional, até 50 caracteres, ex.: HCM36)"]].map(([col,desc]) => (
                 <div key={col} style={{ display:"flex", gap:4, alignItems:"center" }}>
                   <span style={{ background:"var(--color-background-info)", color:"var(--color-text-info)", borderRadius:4, padding:"1px 6px", fontSize:11, fontWeight:500, flexShrink:0 }}>{col}</span>
                   <span style={{ color:"var(--color-text-secondary)", fontSize:11 }}>{desc}</span>
@@ -2848,7 +2903,7 @@ const CAT_OPTS = ["Erro - prioridade alta","Erro - prioridade média","Erro - pr
 
 function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento }) {
   const today = new Date().toISOString().slice(0,10);
-  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", est:"", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", ob:"", desc:"", ap:"", mr:"" });
+  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", est:"", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", sp:"", ob:"", desc:"", ap:"", mr:"" });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
   const [produtos, setProdutos] = useState([]);
   const [estruturas, setEstruturas] = useState([]);
@@ -2894,7 +2949,7 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
       prod: form.prod||null, est: form.est||null, st: form.st||null, dt: form.dt||null,
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
       val: form.val !== "" ? Number(form.val) : null,
-      curva: form.curva||null, ob: form.ob||null, desc: form.desc||null,
+      curva: form.curva||null, sp: form.sp.trim().slice(0,50) || null, ob: form.ob||null, desc: form.desc||null,
       ap: form.ap||null, mr: form.ap==="Não" ? form.mr||null : null,
     }]);
     onClose();
@@ -2934,6 +2989,7 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
       <FRow>
         <FInput label="Categoria" value={form.cat} onChange={v=>set("cat",v)} select options={CAT_OPTS} />
         <FInput label="Data Abertura" value={form.dt} onChange={v=>set("dt",v)} type="date" />
+        <FInput label="Sprint" value={form.sp} onChange={v=>set("sp",v)} maxLength={50} />
       </FRow>
       <FRow>
         <div style={{ flex:1 }}>
@@ -3068,6 +3124,7 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
     imp:  String(issue.imp ?? 0),
     val:  (issue.val ?? 0).toFixed(2),
     curva: issue.curva ?? "",
+    sp:   issue.sp   ?? "",
     ob:   issue.ob   ?? "",
     desc: issue.desc ?? "",
     ap:   issue.ap   ?? "",
@@ -3098,7 +3155,7 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
       prod: form.prod || null, est: form.est || null, st: form.st || null, dt: form.dt || null,
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
       val: form.val !== "" ? Number(form.val) : null,
-      curva: form.curva || null, ob: form.ob || null, desc: form.desc || null,
+      curva: form.curva || null, sp: form.sp.trim().slice(0,50) || null, ob: form.ob || null, desc: form.desc || null,
       seg: issue.seg, segOrd: issue.segOrd,
       ap: form.ap || null, mr: form.ap === "Não" ? form.mr || null : null,
     }]);
@@ -3135,6 +3192,7 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
       <FRow>
         <FInput label="Data Abertura" value={form.dt} onChange={v=>set("dt",v)} type="date" />
         <FInput label="Curva" value={form.curva} onChange={v=>set("curva",v)} select options={["","S","A","B","C","D"]} />
+        <FInput label="Sprint" value={form.sp} onChange={v=>set("sp",v)} maxLength={50} />
       </FRow>
       <FRow>
         <FInput label="É Impeditiva" value={form.imp} onChange={v=>set("imp",v)} select options={[{value:"0",label:"Não"},{value:"1",label:"Sim"}]} />
@@ -3197,7 +3255,7 @@ function FSep() {
   return <div style={{ height:1, background:"var(--color-border-tertiary)", margin:"16px 0" }} />;
 }
 
-function FInput({ label, value, onChange, type="text", select, options, step }) {
+function FInput({ label, value, onChange, type="text", select, options, step, maxLength }) {
   return (
     <div style={{ marginBottom:0 }}>
       <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>{label}</div>
@@ -3211,7 +3269,7 @@ function FInput({ label, value, onChange, type="text", select, options, step }) 
           </select>
         : type === "textarea"
         ? <textarea value={value} onChange={e=>onChange(e.target.value)} rows={3} style={{ width:"100%", boxSizing:"border-box", resize:"vertical", padding:"6px 8px", borderRadius:6, border:"0.5px solid var(--color-border-secondary)", background:"var(--color-background-secondary)", fontSize:13 }} />
-        : <input type={type} value={value} step={step} onChange={e=>onChange(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
+        : <input type={type} value={value} step={step} maxLength={maxLength} onChange={e=>onChange(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
       }
     </div>
   );

@@ -20,6 +20,7 @@ model Issue {
   atendeMultiplos  Boolean   @default(false)
   valor            Float?
   curva            String?
+  sprint           String?
   observacao       String?
   descricao        String?
   impeditiva       Boolean   @default(false)

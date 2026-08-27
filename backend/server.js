@@ -66,6 +66,7 @@ async function applyMigrations() {
     `ALTER TABLE "EspecificacaoAnexo" ADD COLUMN IF NOT EXISTS "motivoDecisao" TEXT`,
     `ALTER TABLE "Especificacao" ADD COLUMN IF NOT EXISTS "modeloTexto" TEXT`,
     `ALTER TABLE "Especificacao" ADD COLUMN IF NOT EXISTS "modeloImagem" TEXT`,
+    `ALTER TABLE "Issue" ADD COLUMN IF NOT EXISTS "sprint" TEXT`,
   ]
   for (const sql of steps) {
     await prisma.$executeRawUnsafe(sql)
@@ -441,7 +442,7 @@ function mergeDate(incoming, existingVal, isUpdate) {
 
 async function upsertIssue(data, existingMap) {
   const { id, nome, categoria, cliente, produto, estrutura, status, dataAbertura,
-          roadmap, atendeMultiplos, valor, curva, observacao, descricao, impeditiva,
+          roadmap, atendeMultiplos, valor, curva, sprint, observacao, descricao, impeditiva,
           aprovacao, motivoReprovacao, segmentoId } = data
 
   if (!id || !nome) {
@@ -480,12 +481,14 @@ async function upsertIssue(data, existingMap) {
     valor:            mergeNum(valor, existing?.valor, isUpdate),
     // Sem default: issue nova sem curva informada e sem cliente casado nasce "sem classificação".
     curva:            mergeStr(curva, existing?.curva, isUpdate),
+    sprint:           mergeStr(sprint, existing?.sprint, isUpdate),
     observacao:       mergeStr(observacao, existing?.observacao, isUpdate),
     descricao:        mergeStr(descricao, existing?.descricao, isUpdate),
     impeditiva:       mergeBool(impeditiva, existing?.impeditiva, isUpdate),
     aprovacao:        mergeStr(aprovacao, existing?.aprovacao, isUpdate),
     motivoReprovacao: mergeStr(motivoReprovacao, existing?.motivoReprovacao, isUpdate),
   }
+  if (commonFields.sprint) commonFields.sprint = String(commonFields.sprint).trim().slice(0, 50) || null
 
   return prisma.issue.upsert({
     where:  { id: issueId },
@@ -543,6 +546,21 @@ app.put('/api/issues/bulk-impeditiva', async (req, reply) => {
   await recomputeAllQtdImpeditivas(prisma)
 
   return { updated: ids.length }
+})
+
+app.put('/api/issues/bulk-sprint', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+  const { ids, sprint } = req.body
+  if (!ids?.length) return reply.status(400).send({ error: 'ids é obrigatório' })
+
+  const value = sprint ? String(sprint).trim().slice(0, 50) || null : null
+
+  await prisma.issue.updateMany({
+    where: { id: { in: ids.map(Number) } },
+    data:  { sprint: value },
+  })
+
+  return { updated: ids.length, sprint: value }
 })
 
 app.delete('/api/issues/:id', async (req, reply) => {

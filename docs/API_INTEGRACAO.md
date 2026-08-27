@@ -57,6 +57,7 @@ O campo `id` identifica a issue de forma exclusiva. Se já existir uma issue com
 | `atendeMultiplos` | boolean | não | Atende mais de um cliente. Criação: default `false`. |
 | `valor` | número | não | Valor financeiro associado à issue. |
 | `curva` | string (`S`\|`A`\|`B`\|`C`\|`D`) | não | Curva manual da própria issue. **Sem default na criação** — se não informado e o cliente não tiver curva conhecida, a issue nasce "Sem classificação" (por desenho: evita que o sistema esconda a falta de dado atrás de um valor forjado). |
+| `sprint` | string (até 50 caracteres) | não | Nome da sprint (ex.: `"HCM36"`). Valores maiores que 50 caracteres são truncados automaticamente. Filtrável na tela de Issues Priorizadas, inclusive por "sem sprint informada". |
 | `observacao` | string | não | — |
 | `descricao` | string | não | — |
 | `impeditiva` | boolean | não | Criação: default `false`. |
@@ -79,6 +80,7 @@ curl -X POST "https://teknisa-prioritizer-production.up.railway.app/api/issues" 
     "status": "Backlog",
     "dataAbertura": "2026-03-01",
     "impeditiva": true,
+    "sprint": "HCM36",
     "descricao": "Descrição detalhada do problema."
   }'
 ```
