@@ -88,7 +88,7 @@ function daysSince(dateStr) {
 
 // ── MOTOR DE SCORE ────────────────────────────────────────────────────────────
 function computeScore(issue, client) {
-  const curva = client ? client.cv : (issue.curva || null);
+  const curva = client ? client.cv : null;
   const cvOrd = CURVE_ORDER[curva] ?? 4;
   const isTeknisa = normName(issue.cl).includes("teknisa");
   const isRoadmap = issue.rm === 1;
@@ -848,7 +848,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
 
   const enriched = useMemo(() => issuesData.map(issue => {
     const client = findClient(issue.cl, clientsData, deparaData);
-    const curva  = client ? client.cv : (issue.curva || null);
+    const curva  = client ? client.cv : null;
     const sc     = computeScore(issue, client);
     return { ...issue, _client:client, _curva:curva, _sc:sc };
   }), [issuesData, clientsData, deparaData]);
