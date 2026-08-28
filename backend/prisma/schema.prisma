@@ -21,6 +21,7 @@ model Issue {
   valor            Float?
   curva            String?
   sprint           String?
+  storyPoints      Int?
   observacao       String?
   descricao        String?
   impeditiva       Boolean   @default(false)

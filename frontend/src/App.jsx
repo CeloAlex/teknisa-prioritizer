@@ -25,7 +25,7 @@ function appIssueToApi(i) {
     id: i.id, nome: i.n, categoria: i.cat ?? null, cliente: i.cl ?? null,
     produto: i.prod ?? null, estrutura: i.est ?? null, status: i.st ?? null, dataAbertura: i.dt ?? null,
     roadmap: i.rm, atendeMultiplos: i.mc, valor: i.val ?? null,
-    curva: i.curva ?? null, sprint: i.sp ?? null, observacao: i.ob ?? null, descricao: i.desc ?? null,
+    curva: i.curva ?? null, sprint: i.sp ?? null, storyPoints: i.pts ?? null, observacao: i.ob ?? null, descricao: i.desc ?? null,
     impeditiva: i.imp == null ? null : !!i.imp,
     aprovacao: i.ap ?? null, motivoReprovacao: i.mr ?? null,
   }
@@ -35,7 +35,7 @@ function apiIssueToApp(i) {
     id: i.id, n: i.nome, cat: i.categoria, cl: i.cliente, prod: i.produto, est: i.estrutura,
     st: i.status, dt: i.dataAbertura ? i.dataAbertura.slice(0, 10) : null,
     rm: i.roadmap ? 1 : 0, mc: i.atendeMultiplos ? 1 : 0,
-    val: i.valor, curva: i.curva, sp: i.sprint ?? null, ob: i.observacao, desc: i.descricao,
+    val: i.valor, curva: i.curva, sp: i.sprint ?? null, pts: i.storyPoints ?? null, ob: i.observacao, desc: i.descricao,
     seg: i.segmento ?? null, segId: i.segmentoId ?? null, segOrd: i.segmentoOrdem ?? 999,
     imp: i.impeditiva ? 1 : 0,
     ap: i.aprovacao ?? null, mr: i.motivoReprovacao ?? null,
@@ -308,6 +308,21 @@ function sortByCriteria(issues, criteriaData) {
     }
     return 0;
   });
+}
+
+// Corta a lista (já ordenada por prioridade) nas primeiras issues cuja soma de
+// story points ainda cabe no limite informado — limite é o total MÁXIMO, não
+// um alvo a atingir: para na primeira issue que faria a soma ultrapassá-lo.
+function capByStoryPointsBudget(issues, limite) {
+  const out = [];
+  let soma = 0;
+  for (const issue of issues) {
+    const pts = issue.pts ?? 0;
+    if (soma + pts > limite) break;
+    soma += pts;
+    out.push(issue);
+  }
+  return out;
 }
 
 // ── ESTILOS ───────────────────────────────────────────────────────────────────
@@ -617,6 +632,7 @@ const ISSUE_HEADER_ALIASES = {
   imp:       ["impeditiva"],
   desc:      ["descricao"],
   sp:        ["sprint"],
+  pts:       ["story points", "storypoints", "pontos", "pontuacao"],
 };
 function normHeader(s) {
   return String(s || "").toLowerCase().normalize("NFD").replace(DIACRITICS_RE,"").replace(/\s+/g," ").trim();
@@ -679,6 +695,7 @@ function parseIssueSheet(arrayBuffer) {
           desc: String(cell(r,"desc") || "").trim() || null,
           curva: null,
           sp:   String(cell(r,"sp") || "").trim().slice(0,50) || null,
+          pts:  cell(r,"pts") === "" ? null : (Number.isFinite(Number(cell(r,"pts"))) ? Number(cell(r,"pts")) : null),
         });
       }
       resolve(issues.filter(x => x.id > 0 && x.n));
@@ -690,14 +707,14 @@ function parseIssueSheet(arrayBuffer) {
 function downloadIssueTemplate() {
   const header = [
     "Id", "Nome", "Categoria", "Cliente", "Produto", "Status",
-    "Data Abertura", "Roadmap", "Atende +1", "Valor", "Impeditiva", "Descrição", "Estrutura do Produto", "Sprint",
+    "Data Abertura", "Roadmap", "Atende +1", "Valor", "Impeditiva", "Descrição", "Estrutura do Produto", "Sprint", "Story Points",
   ];
   const exemplo = [
     101, "Erro no cálculo de férias", "Erro - prioridade alta", "Cliente Exemplo",
-    "Teknisa HCM", "Backlog", "01/03/2026", 0, 1, 5000, "Sim", "Descrição da issue", "Folha", "HCM36",
+    "Teknisa HCM", "Backlog", "01/03/2026", 0, 1, 5000, "Sim", "Descrição da issue", "Folha", "HCM36", 5,
   ];
   const ws = XLSX.utils.aoa_to_sheet([header, exemplo]);
-  ws["!cols"] = [6,30,22,18,16,12,16,10,10,12,32,30,22,14].map(wch => ({ wch }));
+  ws["!cols"] = [6,30,22,18,16,12,16,10,10,12,32,30,22,14,12].map(wch => ({ wch }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Issues");
   XLSX.writeFile(wb, "modelo_importacao_issues.xlsx");
@@ -798,7 +815,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   const [issuesData, setIssuesData] = useState([]);
   const [clientsData, setClientsData] = useState([]);
   const [deparaData, setDeparaData]   = useState([]);
-  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], search:"", dataAberturaDe:"", dataAberturaAte:"" });
+  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], search:"", dataAberturaDe:"", dataAberturaAte:"", pontuacao:"", limitePontos:"" });
   const [showDone, setShowDone]     = useState(false);
   const [importModal, setImportModal] = useState(null); // "issue" | "client" | null
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -888,6 +905,8 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
       if (filters.segmento.length  && !filters.segmento.includes(issue.seg))  return false;
       if (filters.aprovacao.length && !filters.aprovacao.includes(issue.ap ?? "(Não analisado)")) return false;
       if (filters.sprint.length    && !filters.sprint.includes(issue.sp || "(Sem sprint)")) return false;
+      if (filters.pontuacao === "com" && issue.pts == null) return false;
+      if (filters.pontuacao === "sem" && issue.pts != null) return false;
       if (filters.dataAberturaDe  && (!issue.dt || issue.dt < filters.dataAberturaDe))  return false;
       if (filters.dataAberturaAte && (!issue.dt || issue.dt > filters.dataAberturaAte)) return false;
       if (filters.search) {
@@ -898,7 +917,13 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     });
   }
 
-  const filteredIssues = useMemo(() => applyFilters(sorted),          [sorted, filters, showDone]);
+  const filteredIssues = useMemo(() => {
+    const list = applyFilters(sorted);
+    if (filters.pontuacao === "com" && filters.limitePontos !== "") {
+      return capByStoryPointsBudget(list, Number(filters.limitePontos));
+    }
+    return list;
+  }, [sorted, filters, showDone]);
   const filteredEspec  = useMemo(() => applyFilters(sorted, true),    [sorted, filters, showDone]);
 
   const stats = useMemo(() => {
@@ -1087,7 +1112,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     setParametrosLLM(saved);
   }
 
-  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.sprint.length || filters.search || filters.dataAberturaDe || filters.dataAberturaAte;
+  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.sprint.length || filters.search || filters.dataAberturaDe || filters.dataAberturaAte || filters.pontuacao;
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'100vh', fontFamily:'system-ui,sans-serif', gap:12 }}>
@@ -1362,6 +1387,7 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
         <span style={{ background:cb.bg, color:cb.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, border:`0.5px solid ${cb.border}44`, flexShrink:0 }}>{issue._curva ? `Curva ${issue._curva}` : "Sem classificação"}</span>
         {issue.imp === 1 && <span style={{ background:"#FFF7ED", color:"#92400E", border:"0.5px solid #FCD34D88", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, flexShrink:0 }}>⛔ Impeditiva</span>}
         {issue.sp && <span title={`Sprint ${issue.sp}`} style={{ background:"#0C447C", color:"#fff", border:"0.5px solid #0C447C", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:600, whiteSpace:"nowrap", flexShrink:0 }}>🏃 {issue.sp}</span>}
+        {issue.pts != null && <span title="Story Points" style={{ background:"#EEEDFE", color:"#3C3489", border:"0.5px solid #534AB744", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:600, whiteSpace:"nowrap", flexShrink:0 }}>🧩 {issue.pts} pts</span>}
         <span style={{ fontSize:13, fontWeight:500, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{issue.n}</span>
         <span style={{ fontSize:12, color:"var(--color-text-secondary)", whiteSpace:"nowrap", flexShrink:0 }}>{issue.cl}</span>
         <span style={{ fontSize:11, color:"var(--color-text-tertiary)", background:"var(--color-background-secondary)", borderRadius:4, padding:"1px 6px", whiteSpace:"nowrap", flexShrink:0 }}>{issue.st}</span>
@@ -1395,6 +1421,7 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
           <Field label="Estrutura do Produto" value={issue.est} />
           <Field label="Data Abertura"     value={issue.dt} />
           <Field label="Sprint"            value={issue.sp} />
+          <Field label="Story Points"      value={issue.pts} />
           <Field label="Dias em aberto"    value={days+" dias"} color={days>180?"#E24B4A":days>90?"#BA7517":undefined} />
           <Field label="É Impeditiva"      value={issue.imp ? "Sim" : "Não"} color={issue.imp ? "#92400E" : undefined} />
           <Field label="Roadmap"           value={issue.rm ? "Sim" : "Não"} />
@@ -1457,6 +1484,17 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
   const allSegmentos  = useMemo(() => (segmentosData ?? []).map(s => s.nome).sort(),    [segmentosData]);
   const allSprints    = useMemo(() => [...new Set(issuesData.map(x => x.sp).filter(Boolean))].sort(), [issuesData]);
 
+  // Total de story points por sprint entre as issues atualmente listadas (após filtros).
+  const pointsBySprint = useMemo(() => {
+    const map = new Map();
+    for (const issue of issues) {
+      if (issue.pts == null) continue;
+      const key = issue.sp || "(Sem sprint)";
+      map.set(key, (map.get(key) ?? 0) + issue.pts);
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR"));
+  }, [issues]);
+
   return (
     <div>
       <div style={{ background:"var(--color-background-primary)", borderRadius:12, border:"0.5px solid var(--color-border-tertiary)", padding:16, marginBottom:16 }}>
@@ -1481,7 +1519,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             </button>
           )}
           {hasFilters && (
-            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], search:"", dataAberturaDe:"", dataAberturaAte:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
+            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], search:"", dataAberturaDe:"", dataAberturaAte:"", pontuacao:"", limitePontos:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
               <i className="ti ti-x" style={{ fontSize:13 }} aria-hidden /> Limpar
             </button>
           )}
@@ -1540,6 +1578,34 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             selected={filters.sprint}
             onChange={v => sf("sprint", v)}
           />
+          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+            <select
+              value={filters.pontuacao}
+              onChange={e => sf("pontuacao", e.target.value)}
+              style={{
+                background:"var(--color-background-secondary)",
+                border:"0.5px solid var(--color-border-secondary)",
+                borderRadius:8, padding:"7px 10px", fontSize:13,
+              }}
+            >
+              <option value="">Pontuação (todas)</option>
+              <option value="com">Com pontuação</option>
+              <option value="sem">Sem pontuação</option>
+            </select>
+            {filters.pontuacao === "com" && (
+              <input
+                type="number" min="0"
+                value={filters.limitePontos}
+                onChange={e => sf("limitePontos", e.target.value)}
+                placeholder="Limite de pontos"
+                style={{
+                  width:140, background:"var(--color-background-secondary)",
+                  border:"0.5px solid var(--color-border-secondary)",
+                  borderRadius:8, padding:"7px 10px", fontSize:13,
+                }}
+              />
+            )}
+          </div>
           <div style={{ display:"flex", alignItems:"center", gap:6, flex:"1 1 260px", minWidth:0 }}>
             <span style={{ fontSize:12, color:"var(--color-text-tertiary)", whiteSpace:"nowrap" }}>Abertura de</span>
             <input
@@ -1576,6 +1642,8 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             {filters.segmento.map(v => <FilterTag key={v} label={`Segmento: ${v}`} onRemove={() => sf("segmento", filters.segmento.filter(x=>x!==v))} />)}
             {filters.aprovacao.map(v => <FilterTag key={v} label={`Aprovação: ${v}`} onRemove={() => sf("aprovacao", filters.aprovacao.filter(x=>x!==v))} />)}
             {filters.sprint.map(v => <FilterTag key={v} label={`Sprint: ${v}`} onRemove={() => sf("sprint", filters.sprint.filter(x=>x!==v))} />)}
+            {filters.pontuacao === "com" && <FilterTag label={`Com pontuação${filters.limitePontos !== "" ? ` (limite ${filters.limitePontos})` : ""}`} onRemove={() => { sf("pontuacao",""); sf("limitePontos",""); }} />}
+            {filters.pontuacao === "sem" && <FilterTag label="Sem pontuação" onRemove={() => sf("pontuacao","")} />}
             {filters.dataAberturaDe && <FilterTag label={`Abertura de: ${filters.dataAberturaDe}`} onRemove={() => sf("dataAberturaDe","")} />}
             {filters.dataAberturaAte && <FilterTag label={`Abertura até: ${filters.dataAberturaAte}`} onRemove={() => sf("dataAberturaAte","")} />}
             {filters.search && <FilterTag label={`"${filters.search}"`} onRemove={() => sf("search","")} />}
@@ -1588,6 +1656,15 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
           <span key={gs.label} style={{ background:gs.bg, color:gs.color, border:`0.5px solid ${gs.border}66`, borderRadius:6, padding:"2px 9px", fontSize:11 }}>{gs.label}</span>
         ))}
       </div>
+      {pointsBySprint.length > 0 && (
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 }}>
+          {pointsBySprint.map(([sp, total]) => (
+            <span key={sp} style={{ background:"#EEEDFE", color:"#3C3489", border:"0.5px solid #534AB744", borderRadius:6, padding:"2px 9px", fontSize:11, fontWeight:500 }}>
+              🧩 {sp}: {total} pts
+            </span>
+          ))}
+        </div>
+      )}
       <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:10, display:"flex", alignItems:"center", gap:12 }}>
         <span>{especMode ? "Issues em Especificação" : "Issues priorizadas"}: <strong>{issues.length}</strong> de {allIssues.length}</span>
         {issues.length > 0 && toggleSelectAll && (
@@ -2602,7 +2679,8 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
               {[["A","Id (número)"],["B","Nome"],["C","Categoria"],["D","Cliente"],["E","Produto"],
                 ["F","Status"],["G","Data Abertura (DD/MM/AAAA)"],["H","Roadmap (0/1)"],["I","Atende +1 (0/1)"],["J","Valor (R$)"],
                 ["K","Impeditiva (Sim/Não, vazio = mantém valor atual)"],["L","Descrição"],
-                ["M","Estrutura do Produto (opcional)"],["N","Sprint (opcional, até 50 caracteres, ex.: HCM36)"]].map(([col,desc]) => (
+                ["M","Estrutura do Produto (opcional)"],["N","Sprint (opcional, até 50 caracteres, ex.: HCM36)"],
+                ["O","Story Points (opcional)"]].map(([col,desc]) => (
                 <div key={col} style={{ display:"flex", gap:4, alignItems:"center" }}>
                   <span style={{ background:"var(--color-background-info)", color:"var(--color-text-info)", borderRadius:4, padding:"1px 6px", fontSize:11, fontWeight:500, flexShrink:0 }}>{col}</span>
                   <span style={{ color:"var(--color-text-secondary)", fontSize:11 }}>{desc}</span>
@@ -2974,7 +3052,7 @@ const CAT_OPTS = ["Erro - prioridade alta","Erro - prioridade média","Erro - pr
 
 function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento }) {
   const today = new Date().toISOString().slice(0,10);
-  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", est:"", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", sp:"", ob:"", desc:"", ap:"", mr:"" });
+  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", est:"", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", sp:"", pts:"", ob:"", desc:"", ap:"", mr:"" });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
   const [produtos, setProdutos] = useState([]);
   const [estruturas, setEstruturas] = useState([]);
@@ -3023,7 +3101,7 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
       prod: form.prod||null, est: form.est||null, st: form.st||null, dt: form.dt||null,
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
       val: form.val !== "" ? Number(form.val) : null,
-      curva: form.curva||null, sp: form.sp.trim().slice(0,50) || null, ob: form.ob||null, desc: form.desc||null,
+      curva: form.curva||null, sp: form.sp.trim().slice(0,50) || null, pts: form.pts !== "" ? Number(form.pts) : null, ob: form.ob||null, desc: form.desc||null,
       ap: form.ap||null, mr: form.ap==="Não" ? form.mr||null : null,
     }]);
     onClose();
@@ -3081,6 +3159,7 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
       <FRow>
         <FInput label="Curva" value={form.curva} onChange={v=>set("curva",v)} select options={["","S","A","B","C","D"]} />
         <FInput label="Valor (R$)" value={form.val} onChange={v=>set("val",v)} type="number" step="0.01" />
+        <FInput label="Story Points" value={form.pts} onChange={v=>set("pts",v)} type="number" step="1" />
       </FRow>
       <FRow mb={12}>
         <FInput label="É Impeditiva" value={form.imp} onChange={v=>set("imp",v)} select options={BOOLOPS} />
@@ -3199,6 +3278,7 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
     val:  (issue.val ?? 0).toFixed(2),
     curva: issue.curva ?? "",
     sp:   issue.sp   ?? "",
+    pts:  issue.pts != null ? String(issue.pts) : "",
     ob:   issue.ob   ?? "",
     desc: issue.desc ?? "",
     ap:   issue.ap   ?? "",
@@ -3247,7 +3327,7 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
       prod: form.prod || null, est: form.est || null, st: form.st || null, dt: form.dt || null,
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
       val: form.val !== "" ? Number(form.val) : null,
-      curva: form.curva || null, sp: form.sp.trim().slice(0,50) || null, ob: form.ob || null, desc: form.desc || null,
+      curva: form.curva || null, sp: form.sp.trim().slice(0,50) || null, pts: form.pts !== "" ? Number(form.pts) : null, ob: form.ob || null, desc: form.desc || null,
       seg: issue.seg, segOrd: issue.segOrd,
       ap: form.ap || null, mr: form.ap === "Não" ? form.mr || null : null,
     }]);
@@ -3303,6 +3383,7 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
       </FRow>
       <FRow>
         <FInput label="Valor (R$)" value={form.val} onChange={v=>set("val",v)} type="number" step="0.01" />
+        <FInput label="Story Points" value={form.pts} onChange={v=>set("pts",v)} type="number" step="1" />
         <FInput label="Aprovação" value={form.ap} onChange={v=>set("ap",v)} select options={[{value:"",label:"(Não analisado)"},{value:"Sim",label:"Sim"},{value:"Não",label:"Não"}]} />
       </FRow>
       {form.ap === "Não" && (

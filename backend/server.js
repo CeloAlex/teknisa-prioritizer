@@ -443,7 +443,7 @@ function mergeDate(incoming, existingVal, isUpdate) {
 
 async function upsertIssue(data, existingMap) {
   const { id, nome, categoria, cliente, produto, estrutura, status, dataAbertura,
-          roadmap, atendeMultiplos, valor, curva, sprint, observacao, descricao, impeditiva,
+          roadmap, atendeMultiplos, valor, curva, sprint, storyPoints, observacao, descricao, impeditiva,
           aprovacao, motivoReprovacao, segmentoId } = data
 
   if (!id || !nome) {
@@ -493,6 +493,7 @@ async function upsertIssue(data, existingMap) {
     // Sem default: issue nova sem curva informada e sem cliente casado nasce "sem classificação".
     curva:            mergeStr(curva, existing?.curva, isUpdate),
     sprint:           mergeStr(sprint, existing?.sprint, isUpdate),
+    storyPoints:      mergeNum(storyPoints, existing?.storyPoints, isUpdate),
     observacao:       mergeStr(observacao, existing?.observacao, isUpdate),
     descricao:        mergeStr(descricao, existing?.descricao, isUpdate),
     impeditiva:       mergeBool(impeditiva, existing?.impeditiva, isUpdate),
