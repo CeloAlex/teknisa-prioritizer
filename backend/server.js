@@ -409,6 +409,7 @@ app.get('/api/issues', async (req) => {
     return {
       ...issue,
       segmento:      prod?.segmento?.nome  ?? null,
+      segmentoId:    prod?.segmentoId      ?? null,
       segmentoOrdem: prod?.segmento?.ordem ?? 999,
     }
   })

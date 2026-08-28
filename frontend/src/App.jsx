@@ -36,7 +36,7 @@ function apiIssueToApp(i) {
     st: i.status, dt: i.dataAbertura ? i.dataAbertura.slice(0, 10) : null,
     rm: i.roadmap ? 1 : 0, mc: i.atendeMultiplos ? 1 : 0,
     val: i.valor, curva: i.curva, sp: i.sprint ?? null, ob: i.observacao, desc: i.descricao,
-    seg: i.segmento ?? null, segOrd: i.segmentoOrdem ?? 999,
+    seg: i.segmento ?? null, segId: i.segmentoId ?? null, segOrd: i.segmentoOrdem ?? 999,
     imp: i.impeditiva ? 1 : 0,
     ap: i.aprovacao ?? null, mr: i.motivoReprovacao ?? null,
   }
@@ -177,6 +177,7 @@ function getActiveCriteriaReasons(issue, criteriaData) {
       case "projeto":         if (val === 1) label = crit.nome; break;
       case "qtdImpeditivas":  if (val > 0) label = `${crit.nome}: ${val}`; break;
       case "faturamento":     if (val > 0) label = `${crit.nome}: R$ ${fmt2(val)}`; break;
+      case "faturamentoSegmento": if (val > 0) label = `${crit.nome}: R$ ${fmt2(val)}`; break;
       case "categoria":
       case "status":          if (val && val.trim()) label = `${crit.nome}: ${val}`; break;
     }
@@ -244,6 +245,7 @@ const ATRIBUTOS_DISPONIVEIS = [
   { tipo:"issue",   value:"status",           label:"Status (texto)" },
   { tipo:"cliente", value:"curva",            label:"Curva do Cliente" },
   { tipo:"cliente", value:"faturamento",      label:"Faturamento" },
+  { tipo:"cliente", value:"faturamentoSegmento", label:"Faturamento no Segmento" },
   { tipo:"cliente", value:"riscoChurn",       label:"Risco de Churn" },
   { tipo:"cliente", value:"projeto",          label:"Em Projeto" },
   { tipo:"cliente", value:"qtdImpeditivas",   label:"Qtd. Impeditivas" },
@@ -269,10 +271,15 @@ function getFieldValue(enrichedIssue, crit) {
     }
   } else {
     const c = enrichedIssue._client;
-    if (!c) return atributo === "curva" ? null : 0;
+    if (!c) return atributo === "curva" ? null : (atributo === "faturamentoSegmento" ? undefined : 0);
     switch (atributo) {
       case "curva":          return CURVE_ORDER[c.cv] ?? 9;
       case "faturamento":    return c.fat ?? 0;
+      case "faturamentoSegmento": {
+        if (!enrichedIssue.segId) return undefined;
+        const fs = (c.fatSegs ?? []).find(f => f.segmentoId === enrichedIssue.segId);
+        return fs ? fs.valor : undefined;
+      }
       case "riscoChurn":     return c.ch ? 1 : 0;
       case "projeto":        return c.pr ? 1 : 0;
       case "qtdImpeditivas": return c.im ?? 0;
@@ -288,6 +295,10 @@ function sortByCriteria(issues, criteriaData) {
     for (const crit of active) {
       const av = getFieldValue(a, crit);
       const bv = getFieldValue(b, crit);
+      // undefined = critério não se aplica (ex.: sem faturamento cadastrado pro
+      // cliente naquele segmento) — pula pro próximo critério em vez de decidir
+      // a ordem por ausência de dado.
+      if (av === undefined || bv === undefined) continue;
       if (av == null && bv == null) continue;
       const mul = crit.direcao === "asc" ? 1 : -1;
       if (av == null) return mul;
