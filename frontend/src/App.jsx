@@ -908,7 +908,8 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     })
     const result = await res.json()
     if (result?.failed?.length) {
-      alert(`${result.failed.length} de ${result.total} issue(s) não foram salvas. IDs: ${result.failed.map(f => f.id).join(', ')}`)
+      const detalhes = result.failed.map(f => `#${f.id}: ${f.error}`).join('\n')
+      alert(`${result.failed.length} de ${result.total} issue(s) não foram salvas:\n\n${detalhes}`)
     }
     const fresh = await apiFetch(API + '/issues').then(r => r.json())
     setIssuesData(fresh.map(apiIssueToApp))
@@ -1349,7 +1350,7 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
         <span style={{ background:gs.bg, color:gs.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, whiteSpace:"nowrap", border:`0.5px solid ${gs.border}44`, flexShrink:0 }}>{gs.label}</span>
         <span style={{ background:cb.bg, color:cb.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, border:`0.5px solid ${cb.border}44`, flexShrink:0 }}>{issue._curva ? `Curva ${issue._curva}` : "Sem classificação"}</span>
         {issue.imp === 1 && <span style={{ background:"#FFF7ED", color:"#92400E", border:"0.5px solid #FCD34D88", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, flexShrink:0 }}>⛔ Impeditiva</span>}
-        {issue.sp && <span style={{ background:"#E6F1FB", color:"#0C447C", border:"0.5px solid #185FA544", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, whiteSpace:"nowrap", flexShrink:0 }}>{issue.sp}</span>}
+        {issue.sp && <span title={`Sprint ${issue.sp}`} style={{ background:"#0C447C", color:"#fff", border:"0.5px solid #0C447C", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:600, whiteSpace:"nowrap", flexShrink:0 }}>🏃 {issue.sp}</span>}
         <span style={{ fontSize:13, fontWeight:500, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{issue.n}</span>
         <span style={{ fontSize:12, color:"var(--color-text-secondary)", whiteSpace:"nowrap", flexShrink:0 }}>{issue.cl}</span>
         <span style={{ fontSize:11, color:"var(--color-text-tertiary)", background:"var(--color-background-secondary)", borderRadius:4, padding:"1px 6px", whiteSpace:"nowrap", flexShrink:0 }}>{issue.st}</span>
@@ -2458,6 +2459,9 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
 
   async function handleAddProd(nome) {
     if (!selectedSegmento?.id) { setError("Selecione um segmento antes de criar um produto."); return; }
+    const conflito = produtos.find(p => p.nome.toLowerCase().trim() === nome.toLowerCase().trim() && p.segmentoId !== selectedSegmento.id);
+    if (conflito) { setError(`Produto "${nome}" já está cadastrado no segmento "${conflito.segmento?.nome}".`); return; }
+    if (!confirm(`Produto "${nome}" ainda não existe. Confirma que pertence ao segmento "${selectedSegmento.nome}"?`)) return;
     const res = await apiFetch(API + '/produtos', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ nome, segmentoId: selectedSegmento.id }),
@@ -2480,6 +2484,32 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
     set("est", nome);
   }
 
+  const produtoAnalysis = useMemo(() => {
+    const map = new Map(produtos.map(p => [p.nome.toLowerCase().trim(), p]));
+    const conflicts = new Map(); // nome -> mensagem
+    const novos = new Set();
+    for (const iss of preview) {
+      const nome = (iss.prod || "").trim();
+      if (!nome) continue;
+      const existing = map.get(nome.toLowerCase());
+      if (existing) {
+        if (selectedSegmento && existing.segmentoId !== selectedSegmento.id) {
+          conflicts.set(nome, `já está cadastrado no segmento "${existing.segmento?.nome}"`);
+        }
+      } else if (!selectedSegmento) {
+        conflicts.set(nome, `produto novo — selecione um segmento específico (não "Todos os segmentos") para importar issues com este produto`);
+      } else {
+        novos.add(nome);
+      }
+    }
+    return { conflicts, novos };
+  }, [preview, produtos, selectedSegmento]);
+  const [confirmNovos, setConfirmNovos] = useState(false);
+  const importable = useMemo(
+    () => preview.filter(iss => !produtoAnalysis.conflicts.has((iss.prod || "").trim())),
+    [preview, produtoAnalysis]
+  );
+
   // Verifica se o ID do formulário manual já existe
   const manualExists = form.id
     ? existingIssues.find(x => x.id === Number(form.id)) || null
@@ -2495,7 +2525,7 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
   async function handleFile(e) {
     const f = e.target.files[0];
     if (!f) return;
-    setFile(f); setError(""); setPreview([]);
+    setFile(f); setError(""); setPreview([]); setConfirmNovos(false);
     setLoading(true);
     try {
       const buf = await f.arrayBuffer();
@@ -2515,13 +2545,15 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
   // (upsertIssue) preserva o valor existente numa atualização e aplica o padrão
   // só ao criar uma issue nova — mesmo contrato usado pela API de integração.
   function handleImport() {
-    if (preview.length === 0) return;
-    onSave(preview.map(({ _op, ...iss }) => iss));
+    if (importable.length === 0) return;
+    if (produtoAnalysis.novos.size > 0 && !confirmNovos) return;
+    onSave(importable.map(({ _op, ...iss }) => iss));
     onClose();
   }
 
-  const nInsert = preview.filter(x => x._op === "insert").length;
-  const nUpdate = preview.filter(x => x._op === "update").length;
+  const nInsert = importable.filter(x => x._op === "insert").length;
+  const nUpdate = importable.filter(x => x._op === "update").length;
+  const importBlocked = importable.length === 0 || (produtoAnalysis.novos.size > 0 && !confirmNovos);
 
   return (
     <Modal title="+ Issues" onClose={onClose} onSave={null} wide>
@@ -2603,6 +2635,34 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
                 )}
               </div>
 
+              {produtoAnalysis.conflicts.size > 0 && (
+                <div style={{ marginBottom:12, padding:"10px 12px", background:"#FCEBEB", borderRadius:8, fontSize:12, color:"#A32D2D" }}>
+                  <div style={{ fontWeight:600, marginBottom:4 }}>
+                    <i className="ti ti-alert-circle" /> {produtoAnalysis.conflicts.size} produto(s) com problema de segmento — as issues desses produtos NÃO serão importadas:
+                  </div>
+                  <ul style={{ margin:0, paddingLeft:18 }}>
+                    {[...produtoAnalysis.conflicts.entries()].map(([nome, msg]) => (
+                      <li key={nome}><strong>{nome}</strong> — {msg}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {produtoAnalysis.novos.size > 0 && (
+                <div style={{ marginBottom:12, padding:"10px 12px", background:"#FFF7ED", borderRadius:8, fontSize:12, color:"#92400E" }}>
+                  <div style={{ fontWeight:600, marginBottom:4 }}>
+                    <i className="ti ti-info-circle" /> {produtoAnalysis.novos.size} produto(s) novo(s) serão criados no segmento "{selectedSegmento?.nome}":
+                  </div>
+                  <ul style={{ margin:0, paddingLeft:18, marginBottom:8 }}>
+                    {[...produtoAnalysis.novos].map(nome => <li key={nome}>{nome}</li>)}
+                  </ul>
+                  <label style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer" }}>
+                    <input type="checkbox" checked={confirmNovos} onChange={e => setConfirmNovos(e.target.checked)} />
+                    Confirmo que esses produtos pertencem ao segmento "{selectedSegmento?.nome}"
+                  </label>
+                </div>
+              )}
+
               {/* Prévia tabela */}
               <div style={{ borderRadius:8, border:"0.5px solid var(--color-border-tertiary)", overflow:"hidden", marginBottom:16 }}>
                 <div style={{ display:"grid", gridTemplateColumns:"24px 60px 1fr 110px 90px", gap:8, padding:"8px 12px", background:"var(--color-background-secondary)", fontSize:11, fontWeight:500, color:"var(--color-text-tertiary)" }}>
@@ -2630,7 +2690,7 @@ function ImportIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
               </div>
 
               <div style={{ display:"flex", justifyContent:"flex-end" }}>
-                <button onClick={handleImport} style={{ background:"var(--color-text-primary)", color:"var(--color-background-primary)", border:"none", padding:"8px 20px", fontSize:13 }}>
+                <button onClick={handleImport} disabled={importBlocked} style={{ background:"var(--color-text-primary)", color:"var(--color-background-primary)", border:"none", padding:"8px 20px", fontSize:13, opacity: importBlocked ? 0.5 : 1, cursor: importBlocked ? "not-allowed" : "pointer" }}>
                   <i className="ti ti-check" /> Confirmar ({nInsert > 0 ? `${nInsert} nova${nInsert>1?"s":""}` : ""}{nInsert>0&&nUpdate>0?", ":""}{nUpdate > 0 ? `${nUpdate} atualiz.` : ""})
                 </button>
               </div>
@@ -2919,6 +2979,9 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
 
   async function handleAddProd(nome) {
     if (!selectedSegmento?.id) { alert("Selecione um segmento antes de criar um produto."); return; }
+    const conflito = produtos.find(p => p.nome.toLowerCase().trim() === nome.toLowerCase().trim() && p.segmentoId !== selectedSegmento.id);
+    if (conflito) { alert(`Produto "${nome}" já está cadastrado no segmento "${conflito.segmento?.nome}".`); return; }
+    if (!confirm(`Produto "${nome}" ainda não existe. Confirma que pertence ao segmento "${selectedSegmento.nome}"?`)) return;
     const res = await apiFetch(API + '/produtos', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ nome, segmentoId: selectedSegmento.id }),
@@ -3115,7 +3178,7 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
     n:    issue.n    ?? "",
     cat:  issue.cat  ?? "Erro - prioridade alta",
     cl:   issue.cl   ?? "",
-    prod: issue.prod ?? "Teknisa HCM",
+    prod: issue.prod ?? "",
     est:  issue.est  ?? "",
     st:   issue.st   ?? "",
     dt:   issue.dt   ?? "",
@@ -3132,10 +3195,28 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
   });
   const set = (k, v) => setForm(f => ({...f, [k]: v}));
   const [estruturas, setEstruturas] = useState([]);
+  const [produtos, setProdutos] = useState([]);
+  useEffect(() => {
+    apiFetch(API + '/produtos').then(r => r.json()).then(setProdutos).catch(() => {})
+  }, []);
   useEffect(() => {
     if (!selectedSegmento?.id) return;
     apiFetch(API + '/estruturas?segmentoId=' + selectedSegmento.id).then(r => r.json()).then(setEstruturas).catch(() => {})
   }, [selectedSegmento?.id]);
+  async function handleAddProd(nome) {
+    if (!selectedSegmento?.id) { alert("Selecione um segmento antes de criar um produto."); return; }
+    const conflito = produtos.find(p => p.nome.toLowerCase().trim() === nome.toLowerCase().trim() && p.segmentoId !== selectedSegmento.id);
+    if (conflito) { alert(`Produto "${nome}" já está cadastrado no segmento "${conflito.segmento?.nome}".`); return; }
+    if (!confirm(`Produto "${nome}" ainda não existe. Confirma que pertence ao segmento "${selectedSegmento.nome}"?`)) return;
+    const res = await apiFetch(API + '/produtos', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nome, segmentoId: selectedSegmento.id }),
+    });
+    if (!res.ok) { alert("Erro ao criar produto."); return; }
+    const novo = await res.json();
+    setProdutos(prev => [...prev, novo]);
+    set("prod", nome);
+  }
   async function handleAddEstrutura(nome) {
     if (!selectedSegmento?.id) { alert("Selecione um segmento antes de criar uma estrutura."); return; }
     const res = await apiFetch(API + '/estruturas', {
@@ -3170,7 +3251,17 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
       <FInput label="Descrição" value={form.desc} onChange={v=>set("desc",v)} type="textarea" />
       <FRow>
         <FInput label="Cliente *" value={form.cl} onChange={v=>set("cl",v)} />
-        <FInput label="Produto" value={form.prod} onChange={v=>set("prod",v)} select options={["Teknisa HCM","Teknisa Portal do Funcionário","Teknisa Portal do Gestor"]} />
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:4 }}>Produto</div>
+          <CreatableSelect
+            value={form.prod}
+            onChange={v => set("prod", v)}
+            options={produtos}
+            segmento={selectedSegmento}
+            onAdd={handleAddProd}
+            placeholder="Buscar ou criar produto…"
+          />
+        </div>
       </FRow>
       <FRow>
         <div style={{ flex:1 }}>

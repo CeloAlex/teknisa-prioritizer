@@ -453,11 +453,19 @@ async function upsertIssue(data, existingMap) {
   const isUpdate = !!existing
 
   if (produto && segmentoId) {
-    await prisma.produto.upsert({
-      where:  { nome: produto },
-      update: {},
-      create: { nome: produto, segmentoId: Number(segmentoId) },
+    const existingProduto = await prisma.produto.findUnique({
+      where:   { nome: produto },
+      include: { segmento: true },
     })
+    if (existingProduto && existingProduto.segmentoId !== Number(segmentoId)) {
+      throw Object.assign(
+        new Error(`Produto "${produto}" já está cadastrado no segmento "${existingProduto.segmento.nome}" — não é possível importá-lo em outro segmento.`),
+        { statusCode: 409 }
+      )
+    }
+    if (!existingProduto) {
+      await prisma.produto.create({ data: { nome: produto, segmentoId: Number(segmentoId) } })
+    }
   }
 
   if (estrutura && segmentoId) {
@@ -472,7 +480,9 @@ async function upsertIssue(data, existingMap) {
     nome,
     categoria:        mergeStr(categoria, existing?.categoria, isUpdate),
     cliente:          mergeStr(cliente, existing?.cliente, isUpdate),
-    produto:          mergeStr(produto, existing?.produto, isUpdate, 'Teknisa HCM'),
+    // Sem default: produto varia por segmento, então uma issue nova sem produto informado
+    // nasce sem produto em vez de ser presumida (erradamente) como HCM.
+    produto:          mergeStr(produto, existing?.produto, isUpdate),
     estrutura:        mergeStr(estrutura, existing?.estrutura, isUpdate),
     status:           mergeStr(status, existing?.status, isUpdate, 'Backlog'),
     dataAbertura:     mergeDate(dataAbertura, existing?.dataAbertura, isUpdate),
