@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { randomBytes, timingSafeEqual } from 'crypto'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import fastifyStatic from '@fastify/static'
@@ -12,7 +13,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { buildDocx } from './lib/docxGenerator.js'
 import { buildPdf } from './lib/pdfGenerator.js'
-import { gerarRequisitos, revisarRequisitos, editarImagem } from './lib/llm.js'
+import { gerarRequisitos, revisarRequisitos, editarImagem, montarResumoAcumulado } from './lib/llm.js'
 import { resolverDecisoesAnexos } from './lib/anexoDecisao.js'
 import { extractText, extractImagesFromDocx } from './lib/extractText.js'
 
@@ -67,6 +68,14 @@ async function applyMigrations() {
     `ALTER TABLE "Especificacao" ADD COLUMN IF NOT EXISTS "modeloTexto" TEXT`,
     `ALTER TABLE "Especificacao" ADD COLUMN IF NOT EXISTS "modeloImagem" TEXT`,
     `ALTER TABLE "Issue" ADD COLUMN IF NOT EXISTS "sprint" TEXT`,
+    `ALTER TABLE "Especificacao" ADD COLUMN IF NOT EXISTS "resumoAcumulado" TEXT`,
+    `CREATE TABLE IF NOT EXISTS "PainelPublico" (
+       id SERIAL PRIMARY KEY,
+       chave TEXT NOT NULL UNIQUE DEFAULT 'principal',
+       token TEXT NOT NULL UNIQUE,
+       ativo BOOLEAN NOT NULL DEFAULT true,
+       "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+     )`,
   ]
   for (const sql of steps) {
     await prisma.$executeRawUnsafe(sql)
@@ -115,6 +124,35 @@ await app.register(multipart, {
 
 const PUBLIC_ROUTES = new Set(['/api/auth/login'])
 
+// ── Painel Público ───────────────────────────────────────────────────────────
+// Rotas /api/publico/:token/* não passam pelo login: o token opaco na própria URL
+// é a autenticação. Por isso levam limitação de requisições própria (o link pode
+// circular fora do controle de quem gerou) e nunca aparecem no PUBLIC_ROUTES acima
+// (que é para caminhos fixos, não para prefixos com parâmetro).
+const publicRateLimiter = new Map() // ip -> { count, resetAt }
+function checkPublicRateLimit(ip) {
+  const agora = Date.now()
+  const janelaMs = 60_000
+  const limite = 60
+  const entry = publicRateLimiter.get(ip)
+  if (!entry || agora > entry.resetAt) {
+    publicRateLimiter.set(ip, { count: 1, resetAt: agora + janelaMs })
+    return true
+  }
+  entry.count += 1
+  return entry.count <= limite
+}
+
+async function getPainelPublicoAtivo(token) {
+  if (!token || typeof token !== 'string') return null
+  const painel = await prisma.painelPublico.findUnique({ where: { chave: 'principal' } })
+  if (!painel || !painel.ativo) return null
+  const a = Buffer.from(painel.token)
+  const b = Buffer.from(token)
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null
+  return painel
+}
+
 function signToken(operador) {
   return jwt.sign({ operadorId: operador.id }, JWT_SECRET, { expiresIn: '12h' })
 }
@@ -134,6 +172,10 @@ function serializeOperador(operador) {
 app.addHook('preHandler', async (req, reply) => {
   if (!req.url.startsWith('/api')) return
   if (PUBLIC_ROUTES.has(req.url.split('?')[0])) return
+  if (req.url.startsWith('/api/publico/')) {
+    if (!checkPublicRateLimit(req.ip)) return reply.status(429).send({ error: 'Muitas requisições. Tente novamente em instantes.' })
+    return
+  }
 
   const apiKeyHeader = req.headers['x-api-key']
   if (apiKeyHeader) {
@@ -330,6 +372,57 @@ app.put('/api/parametros/llm', async (req, reply) => {
   }
 })
 
+// ── Painel Público (administração) ──────────────────────────────────────────
+
+app.get('/api/parametros/painel-publico', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN'])) return
+  const p = await prisma.painelPublico.findUnique({ where: { chave: 'principal' } })
+  return { habilitado: !!p?.ativo, token: p?.token ?? null }
+})
+
+app.post('/api/parametros/painel-publico/gerar', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN'])) return
+  const token = randomBytes(24).toString('hex')
+  const p = await prisma.painelPublico.upsert({
+    where: { chave: 'principal' },
+    update: { token, ativo: true },
+    create: { chave: 'principal', token, ativo: true },
+  })
+  return { habilitado: p.ativo, token: p.token }
+})
+
+app.put('/api/parametros/painel-publico', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN'])) return
+  const { ativo } = req.body ?? {}
+  const p = await prisma.painelPublico.update({ where: { chave: 'principal' }, data: { ativo: !!ativo } }).catch(() => null)
+  if (!p) return reply.status(404).send({ error: 'Nenhum link foi gerado ainda.' })
+  return { habilitado: p.ativo, token: p.token }
+})
+
+// ── Painel Público (dados, sem login — autenticado pelo token na própria URL) ──
+
+app.get('/api/publico/:token/dados', async (req, reply) => {
+  const painel = await getPainelPublicoAtivo(req.params.token)
+  if (!painel) return reply.status(404).send({ error: 'Link inválido, expirado ou desativado.' })
+
+  const [issues, clients, depara, segmentos] = await Promise.all([
+    issuesComSegmento(),
+    prisma.client.findMany({ orderBy: { nome: 'asc' }, include: { faturamentoSegmentos: true } }),
+    prisma.depara.findMany({ orderBy: { nomeCliente: 'asc' } }),
+    prisma.segmento.findMany({ orderBy: { id: 'asc' }, include: { produtos: true } }),
+  ])
+  return { issues, clients, depara, segmentos }
+})
+
+app.get('/api/publico/:token/criterios', async (req, reply) => {
+  const painel = await getPainelPublicoAtivo(req.params.token)
+  if (!painel) return reply.status(404).send({ error: 'Link inválido, expirado ou desativado.' })
+
+  const { segmentoId } = req.query
+  const where = segmentoId != null ? { segmentoId: Number(segmentoId) } : {}
+  return prisma.criterio.findMany({ where, orderBy: { peso: 'asc' } })
+})
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function normStr(s) {
@@ -398,13 +491,13 @@ async function recomputeAllQtdImpeditivas(prisma) {
 
 // ── Issues ──────────────────────────────────────────────────────────────────
 
-app.get('/api/issues', async (req) => {
+async function issuesComSegmento() {
   const [issues, produtos] = await Promise.all([
     prisma.issue.findMany({ orderBy: { id: 'asc' } }),
     prisma.produto.findMany({ include: { segmento: true } }),
   ])
   const prodMap = new Map(produtos.map(p => [p.nome.toLowerCase().trim(), p]))
-  const enriched = issues.map(issue => {
+  return issues.map(issue => {
     const prod = issue.produto ? prodMap.get(issue.produto.toLowerCase().trim()) : null
     return {
       ...issue,
@@ -413,7 +506,10 @@ app.get('/api/issues', async (req) => {
       segmentoOrdem: prod?.segmento?.ordem ?? 999,
     }
   })
+}
 
+app.get('/api/issues', async (req) => {
+  const enriched = await issuesComSegmento()
   if (req.operador.papel === 'ADMIN') return enriched
   const allowedSegmentos = new Set(req.operador.segmentos.map(s => s.nome))
   return enriched.filter(i => i.segmento && allowedSegmentos.has(i.segmento))
@@ -994,8 +1090,10 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
     buffer: anexo.dadosEditados ?? anexo.dadosOriginais,
     anexo,
   }))
+  // Prefere o resumo consolidado (requisitos + regras + pontos em aberto); especificações geradas
+  // antes desse campo existir caem no fallback antigo (só contexto + objetivo).
   const contextoAnterior = especAnterior
-    ? ([especAnterior.contexto, especAnterior.requisitos?.objetivo].filter(Boolean).join('\n\n') || null)
+    ? (especAnterior.resumoAcumulado || [especAnterior.contexto, especAnterior.requisitos?.objetivo].filter(Boolean).join('\n\n') || null)
     : null
 
   req.log.info({
@@ -1139,6 +1237,7 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
       data: {
         issueId,
         contexto: contexto || null,
+        resumoAcumulado: montarResumoAcumulado(requisitos),
         requisitos,
         horasProgramacao: Number(requisitos.horasProgramacao) || 0,
         horasTeste: Number(requisitos.horasTeste) || 0,

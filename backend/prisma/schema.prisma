@@ -140,6 +140,7 @@ model Especificacao {
   issueId          Int      @unique
   issue            Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
   contexto         String?
+  resumoAcumulado  String?
   requisitos       Json
   horasProgramacao Float
   horasTeste       Float
@@ -177,4 +178,14 @@ model ParametroLLM {
   modeloTexto  String   @default("gpt-4o")
   modeloImagem String   @default("gpt-image-1")
   updatedAt    DateTime @updatedAt
+}
+
+// Link público (sem login) do painel de indicadores/priorização, compartilhável com a Teknisa
+// inteira. Token opaco na própria URL faz o papel de autenticação — só quem tem o link acessa.
+model PainelPublico {
+  id        Int      @id @default(autoincrement())
+  chave     String   @unique @default("principal")
+  token     String   @unique
+  ativo     Boolean  @default(true)
+  updatedAt DateTime @updatedAt
 }

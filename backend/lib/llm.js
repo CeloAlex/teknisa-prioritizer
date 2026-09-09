@@ -203,9 +203,29 @@ function buildTextPrompt({ issue, contexto, anexosTexto, contextoAnterior }) {
     issue.produto ? `Produto: ${issue.produto}` : null,
     issue.segmento ? `Segmento: ${issue.segmento}` : null,
     issue.descricao ? `Descrição da issue:\n${issue.descricao}` : null,
-    contextoAnterior ? `Esta é uma REESPECIFICAÇÃO. Contexto/objetivo já definidos em uma especificação anterior desta mesma issue (entenda como parte do acumulado, não copie literalmente):\n${contextoAnterior}` : null,
+    contextoAnterior ? `Esta é uma REESPECIFICAÇÃO. Resumo consolidado do que já foi definido em rodadas anteriores desta mesma issue (entenda como parte do acumulado a preservar/evoluir, não copie literalmente):\n${contextoAnterior}` : null,
     contexto ? `Informações adicionais fornecidas pelo operador nesta rodada:\n${contexto}` : null,
     anexosTexto ? `Conteúdo extraído de documentos anexados:\n${anexosTexto}` : null,
+  ].filter(Boolean)
+  return partes.join('\n\n')
+}
+
+// Consolida o resultado de uma rodada num resumo compacto para alimentar a próxima reespecificação,
+// no lugar de reenviar o JSON completo (que cresceria a cada rodada). Como é derivado sempre do
+// "requisitos" final (que por sua vez já incorporou o resumo da rodada anterior), o tamanho do prompt
+// de reespecificação fica limitado à complexidade atual da demanda, não ao número de rodadas já feitas.
+export function montarResumoAcumulado(requisitos) {
+  const partes = [
+    `Objetivo: ${requisitos.objetivo}`,
+    requisitos.requisitosFuncionais?.length
+      ? `Requisitos funcionais já definidos:\n${requisitos.requisitosFuncionais.map(rf => `- ${rf.codigo}: ${rf.titulo} — ${rf.descricao}`).join('\n')}`
+      : null,
+    requisitos.regrasNegocio?.length
+      ? `Regras de negócio já definidas:\n${requisitos.regrasNegocio.map(rn => `- ${rn.codigo}: ${rn.texto}`).join('\n')}`
+      : null,
+    requisitos.pontosAValidar?.length
+      ? `Pontos ainda em aberto (pendentes de confirmação com o solicitante):\n${requisitos.pontosAValidar.map(p => `- ${p}`).join('\n')}`
+      : null,
   ].filter(Boolean)
   return partes.join('\n\n')
 }

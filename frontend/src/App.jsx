@@ -776,7 +776,164 @@ function tabsForRole(papel) {
   return ["dashboard","issues","especificacao","clientes","criterios","operadores","parametros"]; // ADMIN
 }
 
+// ── PAINEL PÚBLICO (sem login, acessado por token na URL) ─────────────────────
+const PUBLICO_TABS = ["dashboard", "issues"];
+
+function PublicApp({ token }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+  const [tab, setTab]         = useState("dashboard");
+  const [issuesData, setIssuesData]   = useState([]);
+  const [clientsData, setClientsData] = useState([]);
+  const [deparaData, setDeparaData]   = useState([]);
+  const [segmentosData, setSegmentosData] = useState([]);
+  const [criteriaData, setCriteriaData]   = useState([]);
+  const [selectedSegmento, setSelectedSegmento] = useState(null); // null = Todos os segmentos
+  const [filters, setFilters] = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], search:"", dataAberturaDe:"", dataAberturaAte:"", pontuacao:"", limitePontos:"" });
+  const [showDone, setShowDone] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/publico/${token}/dados`)
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then(({ issues, clients, depara, segmentos }) => {
+        setIssuesData(issues.map(apiIssueToApp));
+        setClientsData(clients.map(apiClientToApp));
+        setDeparaData(depara.map(d => ({ c: d.nomeCliente, i: d.nomeClienteIssue })));
+        setSegmentosData(segmentos);
+        setLoading(false);
+      })
+      .catch(() => { setError("Este link está inválido, expirado ou foi desativado."); setLoading(false); });
+  }, [token]);
+
+  useEffect(() => {
+    const url = `${API}/publico/${token}/criterios` + (selectedSegmento ? `?segmentoId=${selectedSegmento.id}` : "");
+    fetch(url).then(r => r.ok ? r.json() : []).then(setCriteriaData).catch(() => setCriteriaData([]));
+  }, [token, selectedSegmento]);
+
+  const enriched = useMemo(() => issuesData.map(issue => {
+    const client = findClient(issue.cl, clientsData, deparaData);
+    const curva  = client ? client.cv : null;
+    const sc     = computeScore(issue, client);
+    return { ...issue, _client:client, _curva:curva, _sc:sc };
+  }), [issuesData, clientsData, deparaData]);
+
+  const segmentEnriched = useMemo(() => {
+    if (!selectedSegmento) return enriched;
+    return enriched.filter(i => i.seg === selectedSegmento.nome);
+  }, [enriched, selectedSegmento]);
+
+  const sorted = useMemo(() => sortByCriteria(segmentEnriched, criteriaData), [segmentEnriched, criteriaData]);
+
+  const filteredIssues = useMemo(() => {
+    return sorted.filter(issue => {
+      if (showDone  && !isDone(issue.st)) return false;
+      if (!showDone &&  isDone(issue.st)) return false;
+      if (filters.status.length    && !filters.status.includes(issue.st))     return false;
+      if (filters.curva.length     && !filters.curva.includes(issue._curva))  return false;
+      if (filters.categoria.length && !filters.categoria.includes(issue.cat)) return false;
+      if (filters.produto.length   && !filters.produto.includes(issue.prod))  return false;
+      if (filters.estrutura.length && !filters.estrutura.includes(issue.est)) return false;
+      if (filters.segmento.length  && !filters.segmento.includes(issue.seg))  return false;
+      if (filters.aprovacao.length && !filters.aprovacao.includes(issue.ap ?? "(Não analisado)")) return false;
+      if (filters.sprint.length    && !filters.sprint.includes(issue.sp || "(Sem sprint)")) return false;
+      if (filters.pontuacao === "com" && issue.pts == null) return false;
+      if (filters.pontuacao === "sem" && issue.pts != null) return false;
+      if (filters.dataAberturaDe  && (!issue.dt || issue.dt < filters.dataAberturaDe))  return false;
+      if (filters.dataAberturaAte && (!issue.dt || issue.dt > filters.dataAberturaAte)) return false;
+      if (filters.search) {
+        const q = normName(filters.search);
+        if (!normName(issue.n).includes(q) && !normName(issue.cl).includes(q) && !String(issue.id).includes(q)) return false;
+      }
+      return true;
+    });
+  }, [sorted, filters, showDone]);
+
+  const stats = useMemo(() => {
+    const active = sorted.filter(x => !isDone(x.st));
+    return {
+      total:    active.length,
+      critical: active.filter(x => x._sc.group === 0).length,
+      sla:      active.filter(x => x._sc.group === 1).length,
+      churn:    active.filter(x => x._sc.group <= 2 && x._sc.reasons.some(r => r.includes("churn"))).length,
+      espec:    active.filter(x => x.st === "Especificação").length,
+    };
+  }, [sorted]);
+
+  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.sprint.length || filters.search || filters.dataAberturaDe || filters.dataAberturaAte || filters.pontuacao;
+
+  if (loading) return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'100vh', fontFamily:'system-ui,sans-serif', gap:12 }}>
+      <i className="ti ti-loader-2" style={{ fontSize:28, color:'var(--color-text-secondary)', animation:'spin 1s linear infinite' }} />
+      <span style={{ color:'var(--color-text-secondary)' }}>Carregando…</span>
+    </div>
+  );
+  if (error) return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight:'100vh', fontFamily:'system-ui,sans-serif', gap:12, textAlign:'center', padding:24 }}>
+      <i className="ti ti-link-off" style={{ fontSize:32, color:'var(--color-text-tertiary)' }} aria-hidden />
+      <div style={{ fontSize:15, fontWeight:500 }}>{error}</div>
+      <div style={{ fontSize:13, color:'var(--color-text-secondary)' }}>Peça a quem compartilhou o link um endereço atualizado.</div>
+    </div>
+  );
+
+  return (
+    <div style={{ fontFamily:"system-ui,sans-serif", minHeight:"100vh", background:"var(--color-background-tertiary)" }}>
+      <div style={{ background:"var(--color-background-primary)", borderBottom:"0.5px solid var(--color-border-tertiary)", padding:"0 24px" }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", height:56 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{ width:32, height:32, borderRadius:8, background:"#1a1a2e", display:"flex", alignItems:"center", justifyContent:"center" }}>
+              <i className="ti ti-rocket" style={{ fontSize:16, color:"#fff" }} aria-hidden />
+            </div>
+            <div>
+              <div style={{ fontWeight:500, fontSize:15, lineHeight:1.2 }}>Teknisa Prioritizer</div>
+              <div style={{ fontSize:11, color:"var(--color-text-secondary)" }}>Painel Público · Priorização de Issues</div>
+            </div>
+            {segmentosData.length > 0 && (
+              <div style={{ marginLeft:12, display:"flex", alignItems:"center", gap:6 }}>
+                <i className="ti ti-building-community" style={{ fontSize:13, color:"var(--color-text-tertiary)" }} />
+                <select
+                  value={selectedSegmento?.id ?? ""}
+                  onChange={e => setSelectedSegmento(e.target.value ? segmentosData.find(s => s.id === Number(e.target.value)) : null)}
+                  style={{ fontSize:13, fontWeight:500, border:"0.5px solid var(--color-border-secondary)", borderRadius:6, padding:"4px 8px", background:"var(--color-background-secondary)", color:"var(--color-text-primary)", cursor:"pointer" }}
+                >
+                  <option value="">Todos os segmentos</option>
+                  {segmentosData.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+          <span style={{ fontSize:11, background:"var(--color-background-secondary)", color:"var(--color-text-secondary)", borderRadius:6, padding:"3px 10px", display:"flex", alignItems:"center", gap:5 }}>
+            <i className="ti ti-eye" style={{ fontSize:13 }} aria-hidden /> Somente leitura
+          </span>
+        </div>
+        <div style={{ display:"flex", gap:0 }}>
+          {PUBLICO_TABS.map(t => (
+            <button key={t} onClick={() => setTab(t)} style={{
+              padding:"10px 16px", fontSize:13, background:"none", border:"none",
+              borderBottom: tab===t ? "2px solid var(--color-text-primary)" : "2px solid transparent",
+              color: tab===t ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+              fontWeight: tab===t ? 500 : 400, cursor:"pointer",
+              display:"flex", alignItems:"center", gap:6
+            }}>
+              <i className={`ti ${TAB_ICONS[t]}`} style={{ fontSize:14 }} aria-hidden />
+              {TAB_LABELS[t]}
+              {t==="issues" && <span style={{ background:"var(--color-background-secondary)", borderRadius:10, padding:"1px 7px", fontSize:11 }}>{filteredIssues.length}</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding:"24px", maxWidth:1280, margin:"0 auto" }}>
+        {tab==="dashboard" && <DashboardTab stats={stats} issues={sorted} enriched={segmentEnriched} criteriaData={criteriaData} segmento={selectedSegmento} isAdmin={false} isPublic />}
+        {tab==="issues"    && <IssuesTab issues={filteredIssues} allIssues={sorted} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={sorted} hasFilters={!!hasFilters} isAdmin={false} isPublic segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const publicMatch = window.location.pathname.match(/^\/painel\/([A-Za-z0-9]+)\/?$/);
+  if (publicMatch) return <PublicApp token={publicMatch[1]} />;
+
   const [authLoading, setAuthLoading] = useState(true);
   const [operador, setOperador]       = useState(null);
 
@@ -829,6 +986,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   const [selectedSegmento, setSelectedSegmento] = useState(null); // { id, nome }
   const [operadoresData, setOperadoresData] = useState([]);
   const [parametrosLLM, setParametrosLLM] = useState(null);
+  const [painelPublico, setPainelPublico] = useState(null);
   const [especificacoesExistentes, setEspecificacoesExistentes] = useState(new Set());
 
   // Segmentos que este operador pode visualizar/selecionar (todos, se Admin)
@@ -864,6 +1022,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     if (!isAdmin) return
     apiFetch(API + '/operadores').then(r => r.json()).then(setOperadoresData).catch(() => {})
     apiFetch(API + '/parametros/llm').then(r => r.json()).then(setParametrosLLM).catch(() => {})
+    apiFetch(API + '/parametros/painel-publico').then(r => r.json()).then(setPainelPublico).catch(() => {})
   }, [isAdmin])
 
   // Carrega critérios do segmento selecionado (ou todos quando nenhum segmento está ativo)
@@ -1112,6 +1271,22 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     setParametrosLLM(saved);
   }
 
+  async function handleGerarPainelPublico() {
+    const res = await apiFetch(API + "/parametros/painel-publico/gerar", { method: "POST" });
+    const saved = await res.json();
+    if (!res.ok) throw new Error(saved.error || "Não foi possível gerar o link.");
+    setPainelPublico(saved);
+  }
+  async function handleTogglePainelPublico(ativo) {
+    const res = await apiFetch(API + "/parametros/painel-publico", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ativo }),
+    });
+    const saved = await res.json();
+    if (!res.ok) throw new Error(saved.error || "Não foi possível atualizar o link.");
+    setPainelPublico(saved);
+  }
+
   const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.sprint.length || filters.search || filters.dataAberturaDe || filters.dataAberturaAte || filters.pontuacao;
 
   if (loading) return (
@@ -1210,7 +1385,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
         {tab==="clientes"     && <ClientsTab clients={clientsData} onAddSingle={c => handleAddClients([c])} isAdmin={isAdmin} segmentosData={segmentosData} onSaveFatSeg={handleSaveFatSeg} onDeleteFatSeg={handleDeleteFatSeg} />}
         {tab==="criterios"    && <CriteriosTab criteriaData={criteriaData} issues={filteredIssues} onToggle={handleToggleCriterio} onSave={handleSaveCriterio} onDelete={handleDeleteCriterio} onReorder={handleReorderCriterio} />}
         {tab==="operadores"   && <OperadoresTab operadores={operadoresData} segmentosData={segmentosData} currentOperadorId={operador.id} onCreate={handleCreateOperador} onUpdate={handleUpdateOperador} onDeactivate={handleDeactivateOperador} />}
-        {tab==="parametros"   && <ParametrosTab parametros={parametrosLLM} onSave={handleSaveParametrosLLM} />}
+        {tab==="parametros"   && <ParametrosTab parametros={parametrosLLM} onSave={handleSaveParametrosLLM} painelPublico={painelPublico} onGerarPainelPublico={handleGerarPainelPublico} onTogglePainelPublico={handleTogglePainelPublico} />}
       </div>
 
       {confirmDelete && (
@@ -1288,7 +1463,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
-function DashboardTab({ stats, issues, enriched, criteriaData, segmento, isAdmin }) {
+function DashboardTab({ stats, issues, enriched, criteriaData, segmento, isAdmin, isPublic }) {
   const active = issues.filter(x => !isDone(x.st));
   const top    = active.slice(0, 10);
 
@@ -1311,7 +1486,7 @@ function DashboardTab({ stats, issues, enriched, criteriaData, segmento, isAdmin
             </span>
           )}
         </div>
-        {items.map((issue, i) => <IssueRow key={issue.id} issue={issue} rank={i + 1} compact criteriaData={criteriaData} isAdmin={isAdmin} />)}
+        {items.map((issue, i) => <IssueRow key={issue.id} issue={issue} rank={i + 1} compact criteriaData={criteriaData} isAdmin={isAdmin} isPublic={isPublic} />)}
       </div>
     );
   }
@@ -1355,7 +1530,7 @@ function DashboardTab({ stats, issues, enriched, criteriaData, segmento, isAdmin
 }
 
 // ── ISSUE ROW ─────────────────────────────────────────────────────────────────
-function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecificacao, temEspecificacao, criteriaData, isAdmin }) {
+function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecificacao, temEspecificacao, criteriaData, isAdmin, isPublic }) {
   const [expanded, setExpanded] = useState(false);
   const gs = GROUP_STYLE[issue._sc.group] || GROUP_STYLE[6];
   const cb = curveBadge(issue._curva);
@@ -1426,8 +1601,8 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
           <Field label="É Impeditiva"      value={issue.imp ? "Sim" : "Não"} color={issue.imp ? "#92400E" : undefined} />
           <Field label="Roadmap"           value={issue.rm ? "Sim" : "Não"} />
           <Field label="Atende +1 cliente" value={issue.mc ? "Sim" : "Não"} />
-          <Field label="Valor"             value={issue.val>0 ? `R$ ${issue.val.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />
-          {isAdmin && <Field label="Faturamento do cliente" value={issue._client ? `R$ ${(issue._client.fat||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />}
+          {!isPublic && <Field label="Valor"             value={issue.val>0 ? `R$ ${issue.val.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />}
+          {isAdmin && !isPublic && <Field label="Faturamento do cliente" value={issue._client ? `R$ ${(issue._client.fat||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />}
           <Field label="Aprovação" value={issue.ap ?? "(Não analisado)"} color={issue.ap==="Não"?"#A32D2D":issue.ap==="Sim"?"#27500A":undefined} />
           {issue.ap==="Não" && issue.mr && <Field label="Motivo da reprovação" value={issue.mr} />}
           {issue.desc && (
@@ -1438,7 +1613,7 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
           <div style={{ gridColumn:"1 / -1" }}>
             <div style={{ fontSize:11, color:"var(--color-text-tertiary)", marginBottom:4 }}>Critérios de Priorização</div>
             <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
-              {getActiveCriteriaReasons(issue, criteriaData).map(r => (
+              {getActiveCriteriaReasons(issue, criteriaData).filter(r => !isPublic || !r.includes("R$")).map(r => (
                 <span key={r} style={{ background:"var(--color-background-info)", color:"var(--color-text-info)", borderRadius:6, padding:"2px 8px", fontSize:11 }}>{r}</span>
               ))}
             </div>
@@ -1458,7 +1633,7 @@ function Field({ label, value, color }) {
 }
 
 // ── ISSUES TAB ────────────────────────────────────────────────────────────────
-function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDone, issuesData, hasFilters, especMode, selectedIds, toggleSelect, toggleSelectAll, onEditSave, canEdit, isAdmin, segmentosData, criteriaData, selectedSegmento, especificacoesExistentes, onEspecificacaoGerada }) {
+function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDone, issuesData, hasFilters, especMode, selectedIds, toggleSelect, toggleSelectAll, onEditSave, canEdit, isAdmin, isPublic, segmentosData, criteriaData, selectedSegmento, especificacoesExistentes, onEspecificacaoGerada }) {
   function sf(k, v) { setFilters(f => ({...f,[k]:v})); }
   const [issueSort, setIssueSort]         = useState({ field: null, dir: "asc" });
   const [editIssue, setEditIssue]         = useState(null);
@@ -1708,7 +1883,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             Nenhuma issue encontrada
           </div>
         )}
-        {displayedIssues.map((issue,i) => <IssueRow key={issue.id} issue={issue} rank={i+1} selected={selectedIds && selectedIds.has(issue.id)} onToggle={toggleSelect} onEdit={onEditSave && canEdit ? (i => setEditIssue(i)) : undefined} onEspecificacao={especMode ? (i => setEspecIssue(i)) : undefined} temEspecificacao={especificacoesExistentes?.has(issue.id)} criteriaData={criteriaData} isAdmin={isAdmin} />)}
+        {displayedIssues.map((issue,i) => <IssueRow key={issue.id} issue={issue} rank={i+1} selected={selectedIds && selectedIds.has(issue.id)} onToggle={toggleSelect} onEdit={onEditSave && canEdit ? (i => setEditIssue(i)) : undefined} onEspecificacao={especMode ? (i => setEspecIssue(i)) : undefined} temEspecificacao={especificacoesExistentes?.has(issue.id)} criteriaData={criteriaData} isAdmin={isAdmin} isPublic={isPublic} />)}
       </div>
       {editIssue && (
         <EditIssueModal
@@ -2404,8 +2579,89 @@ function OperadorFormModal({ onClose, onSubmit, initialData, segmentosData, onDe
   );
 }
 
+// ── PAINEL PÚBLICO (administração) ────────────────────────────────────────────
+function PainelPublicoCard({ painelPublico, onGerar, onToggle }) {
+  const [busy, setBusy]     = useState(false);
+  const [error, setError]   = useState("");
+  const [copied, setCopied] = useState(false);
+  const [confirmGerar, setConfirmGerar] = useState(false);
+
+  if (!painelPublico) return null;
+  const url = painelPublico.token ? `${window.location.origin}/painel/${painelPublico.token}` : null;
+
+  async function run(fn) {
+    setError(""); setBusy(true);
+    try { await fn(); } catch (e) { setError(e.message || "Não foi possível concluir a ação."); }
+    setBusy(false);
+  }
+
+  function copyLink() {
+    navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  }
+
+  return (
+    <div style={{ background:"var(--color-background-primary)", borderRadius:12, border:"0.5px solid var(--color-border-tertiary)", padding:20, marginTop:16 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+        <i className="ti ti-world" style={{ fontSize:16, color:"var(--color-text-tertiary)" }} aria-hidden />
+        <span style={{ fontWeight:500, fontSize:14 }}>Painel Público</span>
+        {url && (
+          <span style={{ fontSize:11, background: painelPublico.habilitado ? "#EAF3DE" : "#FCEBEB", color: painelPublico.habilitado ? "#27500A" : "#A32D2D", border:`0.5px solid ${painelPublico.habilitado ? "#3B6D11" : "#E24B4A"}44`, borderRadius:6, padding:"1px 8px" }}>
+            {painelPublico.habilitado ? "Ativo" : "Desativado"}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:16 }}>
+        Link sem necessidade de login, com indicadores de priorização por segmento — para compartilhar dentro da Teknisa. Qualquer pessoa com o link acessa; desative para revogar o acesso a qualquer momento.
+      </div>
+      {url ? (
+        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:12 }}>
+          <input readOnly value={url} onFocus={e => e.target.select()} style={{ flex:1, fontSize:12, fontFamily:"monospace" }} />
+          <button onClick={copyLink} style={{ padding:"7px 12px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", cursor:"pointer", fontSize:12, whiteSpace:"nowrap" }}>
+            <i className={`ti ${copied ? "ti-check" : "ti-copy"}`} style={{ fontSize:13, marginRight:4 }} />{copied ? "Copiado" : "Copiar"}
+          </button>
+        </div>
+      ) : (
+        <div style={{ fontSize:12, color:"var(--color-text-tertiary)", marginBottom:12 }}>Nenhum link foi gerado ainda.</div>
+      )}
+      {error && <div style={{ fontSize:12, color:"#A32D2D", marginBottom:12 }}>{error}</div>}
+      <div style={{ display:"flex", gap:8 }}>
+        <button
+          onClick={() => url ? setConfirmGerar(true) : run(onGerar)}
+          disabled={busy}
+          style={{ padding:"7px 14px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", cursor:"pointer", fontSize:12, fontWeight:500 }}
+        >
+          <i className="ti ti-refresh" style={{ fontSize:13, marginRight:4 }} />{url ? "Gerar novo link" : "Gerar link"}
+        </button>
+        {url && (
+          <button
+            onClick={() => run(() => onToggle(!painelPublico.habilitado))}
+            disabled={busy}
+            style={{ padding:"7px 14px", borderRadius:8, border:"none", background: painelPublico.habilitado ? "#FCEBEB" : "#EAF3DE", color: painelPublico.habilitado ? "#A32D2D" : "#27500A", cursor:"pointer", fontSize:12, fontWeight:500 }}
+          >
+            <i className={`ti ${painelPublico.habilitado ? "ti-ban" : "ti-check"}`} style={{ fontSize:13, marginRight:4 }} />{painelPublico.habilitado ? "Desativar" : "Reativar"}
+          </button>
+        )}
+      </div>
+      {confirmGerar && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:2000 }}>
+          <div style={{ background:"var(--color-background-primary)", borderRadius:16, border:"0.5px solid var(--color-border-tertiary)", padding:28, width:380, textAlign:"center" }}>
+            <div style={{ fontWeight:500, fontSize:16, marginBottom:8 }}>Gerar novo link?</div>
+            <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:24 }}>
+              O link atual deixará de funcionar imediatamente para quem já o tiver recebido.
+            </div>
+            <div style={{ display:"flex", gap:8, justifyContent:"center" }}>
+              <button onClick={() => setConfirmGerar(false)} style={{ padding:"8px 20px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"transparent", color:"var(--color-text-secondary)", cursor:"pointer", fontSize:13, fontWeight:500 }}>Cancelar</button>
+              <button onClick={() => { setConfirmGerar(false); run(onGerar); }} style={{ padding:"8px 20px", borderRadius:8, border:"none", background:"#A32D2D", color:"#fff", cursor:"pointer", fontSize:13, fontWeight:500 }}>Sim, gerar novo link</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── PARÂMETROS TAB ────────────────────────────────────────────────────────────
-function ParametrosTab({ parametros, onSave }) {
+function ParametrosTab({ parametros, onSave, painelPublico, onGerarPainelPublico, onTogglePainelPublico }) {
   const [apiKey, setApiKey] = useState("");
   const [modeloTexto, setModeloTexto] = useState("gpt-4o");
   const [modeloImagem, setModeloImagem] = useState("gpt-image-1");
@@ -2465,6 +2721,7 @@ function ParametrosTab({ parametros, onSave }) {
           {saving ? "Salvando..." : "Salvar"}
         </button>
       </div>
+      <PainelPublicoCard painelPublico={painelPublico} onGerar={onGerarPainelPublico} onToggle={onTogglePainelPublico} />
     </div>
   );
 }
