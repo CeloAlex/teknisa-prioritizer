@@ -57,10 +57,13 @@ O campo `id` identifica a issue de forma exclusiva. Se já existir uma issue com
 | `atendeMultiplos` | boolean | não | Atende mais de um cliente. Criação: default `false`. |
 | `valor` | número | não | Valor financeiro associado à issue. |
 | `curva` | string (`S`\|`A`\|`B`\|`C`\|`D`) | não | Curva manual da própria issue. **Sem default na criação** — se não informado e o cliente não tiver curva conhecida, a issue nasce "Sem classificação" (por desenho: evita que o sistema esconda a falta de dado atrás de um valor forjado). |
-| `sprint` | string (até 50 caracteres) | não | Nome da sprint (ex.: `"HCM36"`). Valores maiores que 50 caracteres são truncados automaticamente. Filtrável na tela de Issues Priorizadas, inclusive por "sem sprint informada". |
+| `sprint` | string (até 50 caracteres) | não | Nome da sprint (ex.: `"HCM36"`). Valores maiores que 50 caracteres são truncados automaticamente. Filtrável na tela de Issues Priorizadas, inclusive por "sem sprint informada". **Cumulativo**: internamente a issue guarda um histórico de sprints (`sprints`); enviar um valor diferente do último já registrado o **acrescenta** ao histórico em vez de substituí-lo (reflete replanejamento — a issue passou por mais de uma sprint). Enviar o mesmo valor já registrado como último não duplica. Enviar `""` explicitamente limpa todo o histórico. |
 | `observacao` | string | não | — |
 | `descricao` | string | não | — |
 | `impeditiva` | boolean | não | Criação: default `false`. |
+| `devExclusivo` | boolean | não | Indica que o recurso de desenvolvimento já é exclusivo do cliente para esta issue. Criação: default `false`. Issues com este atributo não entram no corte por orçamento de Story Points (não competem pelo orçamento compartilhado). |
+| `pge` | boolean | não | Issue de Planejamento Estratégico (PGE). Criação: default `false`. Permite criar critério de priorização decrescente específico por segmento. |
+| `conversao` | boolean | não | Issue de conversão de plataforma/tecnologia (ex. Delphi→Web, Angular→Vue). Criação: default `false`. Permite criar critério de priorização decrescente específico por segmento. |
 | `aprovacao` | string (`"Sim"`\|`"Não"`) | não | — |
 | `motivoReprovacao` | string | não | — |
 | `segmentoId` | inteiro | não | Usado só para criar `produto`/`estrutura` novos automaticamente, se necessário. Não é um campo salvo na issue. |
@@ -135,6 +138,7 @@ O campo `nome` identifica o cliente de forma exclusiva (deve ser exatamente o me
 | `curva` | string (`S`\|`A`\|`B`\|`C`\|`D`) | não | Criação: default `"B"`. |
 | `riscoChurn` | boolean | não | Criação: default `false`. |
 | `projeto` | boolean | não | Cliente em projeto. Criação: default `false`. |
+| `emCancelamento` | boolean | não | Cliente em processo de cancelamento. Criação: default `false`. Issues deste cliente nunca são priorizadas (sempre ordenadas por último, independente de critérios/pesos). |
 
 ### `POST /api/clients` — um cliente por vez
 

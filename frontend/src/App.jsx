@@ -27,6 +27,9 @@ function appIssueToApi(i) {
     roadmap: i.rm, atendeMultiplos: i.mc, valor: i.val ?? null,
     curva: i.curva ?? null, sprint: i.sp ?? null, storyPoints: i.pts ?? null, observacao: i.ob ?? null, descricao: i.desc ?? null,
     impeditiva: i.imp == null ? null : !!i.imp,
+    devExclusivo: i.dx == null ? null : !!i.dx,
+    pge: i.pge == null ? null : !!i.pge,
+    conversao: i.conv == null ? null : !!i.conv,
     aprovacao: i.ap ?? null, motivoReprovacao: i.mr ?? null,
   }
 }
@@ -35,9 +38,10 @@ function apiIssueToApp(i) {
     id: i.id, n: i.nome, cat: i.categoria, cl: i.cliente, prod: i.produto, est: i.estrutura,
     st: i.status, dt: i.dataAbertura ? i.dataAbertura.slice(0, 10) : null,
     rm: i.roadmap ? 1 : 0, mc: i.atendeMultiplos ? 1 : 0,
-    val: i.valor, curva: i.curva, sp: i.sprint ?? null, pts: i.storyPoints ?? null, ob: i.observacao, desc: i.descricao,
+    val: i.valor, curva: i.curva, sps: i.sprints ?? [], pts: i.storyPoints ?? null, ob: i.observacao, desc: i.descricao,
     seg: i.segmento ?? null, segId: i.segmentoId ?? null, segOrd: i.segmentoOrdem ?? 999,
     imp: i.impeditiva ? 1 : 0,
+    dx: i.devExclusivo ? 1 : 0, pge: i.pge ? 1 : 0, conv: i.conversao ? 1 : 0,
     ap: i.aprovacao ?? null, mr: i.motivoReprovacao ?? null,
   }
 }
@@ -45,14 +49,14 @@ function appClientToApi(c) {
   return {
     nome: c.n, aceite: c.ac ?? null, faturamento: c.fat ?? null,
     tipo: c.tp ?? null, curva: c.cv ?? null, riscoChurn: c.ch,
-    projeto: c.pr, codigo: c.codigo ?? null,
+    projeto: c.pr, emCancelamento: c.cc, codigo: c.codigo ?? null,
   }
 }
 function apiClientToApp(c) {
   return {
     id: c.id, n: c.nome, ac: c.aceite ? c.aceite.slice(0, 10) : null,
     fat: c.faturamento, tp: c.tipo, cv: c.curva,
-    ch: c.riscoChurn ? 1 : 0, pr: c.projeto ? 1 : 0, im: c.qtdImpeditivas,
+    ch: c.riscoChurn ? 1 : 0, pr: c.projeto ? 1 : 0, cc: c.emCancelamento ? 1 : 0, im: c.qtdImpeditivas,
     codigo: c.codigo ?? null,
     fatSegs: (c.faturamentoSegmentos ?? []).map(fs => ({ id: fs.id, segmentoId: fs.segmentoId, valor: fs.valor })),
   }
@@ -169,6 +173,8 @@ function getActiveCriteriaReasons(issue, criteriaData) {
                                 : `${crit.nome}: ${CURVA_NAMES[val] ?? "?"}`;
                               break;
       case "impeditiva":      if (val === 1) label = crit.nome; break;
+      case "pge":             if (val === 1) label = crit.nome; break;
+      case "conversao":       if (val === 1) label = crit.nome; break;
       case "roadmap":         if (val === 1) label = crit.nome; break;
       case "atendeMultiplos": if (val === 1) label = crit.nome; break;
       case "valor":           if (val > 0) label = `${crit.nome}: R$ ${fmt2(val)}`; break;
@@ -237,6 +243,8 @@ const ATRIBUTOS_DISPONIVEIS = [
   { tipo:"issue",   value:"diasAberto",       label:"Dias em Aberto" },
   { tipo:"issue",   value:"curva",            label:"Curva da Issue" },
   { tipo:"issue",   value:"impeditiva",        label:"É Impeditiva" },
+  { tipo:"issue",   value:"pge",              label:"PGE (Planejamento Estratégico)" },
+  { tipo:"issue",   value:"conversao",        label:"Conversão" },
   { tipo:"issue",   value:"roadmap",          label:"É Roadmap" },
   { tipo:"issue",   value:"atendeMultiplos",  label:"Atende Múltiplos Clientes" },
   { tipo:"issue",   value:"valor",            label:"Valor (R$)" },
@@ -261,6 +269,8 @@ function getFieldValue(enrichedIssue, crit) {
       case "diasAberto":      return daysSince(enrichedIssue.dt);
       case "curva":           return CURVE_ORDER[enrichedIssue.curva] ?? 9;
       case "impeditiva":      return enrichedIssue.imp ?? 0;
+      case "pge":             return enrichedIssue.pge ? 1 : 0;
+      case "conversao":       return enrichedIssue.conv ? 1 : 0;
       case "roadmap":         return enrichedIssue.rm ? 1 : 0;
       case "atendeMultiplos": return enrichedIssue.mc ? 1 : 0;
       case "valor":           return enrichedIssue.val ?? 0;
@@ -290,8 +300,11 @@ function getFieldValue(enrichedIssue, crit) {
 
 function sortByCriteria(issues, criteriaData) {
   const active = [...criteriaData].filter(c => c.ativo).sort((a, b) => a.peso - b.peso);
-  if (!active.length) return issues;
   return [...issues].sort((a, b) => {
+    // Regra dura, não configurável: cliente em processo de cancelamento nunca é
+    // priorizado — sempre ordenado por último, independente de critérios/pesos.
+    const aCanc = a._client?.cc ? 1 : 0, bCanc = b._client?.cc ? 1 : 0;
+    if (aCanc !== bCanc) return aCanc - bCanc;
     for (const crit of active) {
       const av = getFieldValue(a, crit);
       const bv = getFieldValue(b, crit);
@@ -312,15 +325,88 @@ function sortByCriteria(issues, criteriaData) {
 
 // Corta a lista (já ordenada por prioridade) nas primeiras issues cuja soma de
 // story points ainda cabe no limite informado — limite é o total MÁXIMO, não
-// um alvo a atingir: para na primeira issue que faria a soma ultrapassá-lo.
+// um alvo a atingir: para na primeira issue compartilhada que faria a soma
+// ultrapassá-lo. Issues "Dev Exclusivo" nunca são cortadas nem contam para a
+// soma — o recurso delas já é exclusivo do cliente, não disputa o orçamento
+// compartilhado da sprint.
 function capByStoryPointsBudget(issues, limite) {
   const out = [];
-  let soma = 0;
+  let soma = 0, estourou = false;
   for (const issue of issues) {
+    if (issue.dx) { out.push(issue); continue; }
+    if (estourou) continue;
     const pts = issue.pts ?? 0;
-    if (soma + pts > limite) break;
+    if (soma + pts > limite) { estourou = true; continue; }
     soma += pts;
     out.push(issue);
+  }
+  return out;
+}
+
+// Reorganiza um grupo de issues (já na ordem de prioridade) em rodadas: a cada
+// rodada, cada cliente contribui com até `limite` das suas issues de maior
+// prioridade ainda não usadas, respeitando a ordem em que os clientes aparecem
+// no grupo original; quando um cliente esgota o backlog ele simplesmente é
+// pulado, e o ciclo recomeça do primeiro cliente na rodada seguinte, até
+// esgotar todas as issues do grupo. Promove diversidade de clientes sem mudar
+// a prioridade relativa das issues de cada cliente entre si.
+function roundRobinPorCliente(items, limite) {
+  const ordem = [];
+  const filas = new Map();
+  for (const issue of items) {
+    // Agrupa pelo cliente CADASTRADO (já resolvido via De-Para/match fuzzy em
+    // _client), não pelo texto bruto da issue — variações de grafia do mesmo
+    // cliente entre issues diferentes não devem contar como clientes distintos.
+    const ck = issue._client ? `c:${issue._client.id}` : `n:${issue.cl || "(Sem cliente)"}`;
+    if (!filas.has(ck)) { filas.set(ck, []); ordem.push(ck); }
+    filas.get(ck).push(issue);
+  }
+  const out = [];
+  let restantes = items.length;
+  while (restantes > 0) {
+    for (const ck of ordem) {
+      const fila = filas.get(ck);
+      if (!fila.length) continue;
+      const leva = fila.splice(0, limite);
+      out.push(...leva);
+      restantes -= leva.length;
+    }
+  }
+  return out;
+}
+
+// Aplica a diversidade por cliente à lista inteira já ordenada por critérios,
+// respeitando o limite (issues por cliente por rodada) configurado por
+// Estrutura e/ou Produto. Produto tem precedência sobre Estrutura quando ambos
+// têm limite definido. Sem limite informado em nenhum dos dois, a issue não é
+// afetada — mantém a posição definida só pelos critérios de priorização.
+// A reordenação é feita preservando as posições globais ocupadas por cada
+// escopo (Estrutura/Produto) na lista original — só quem ocupa cada posição
+// muda, o entrelaçamento entre escopos diferentes no ranking geral não muda.
+function applyDiversidadeCliente(sorted, estruturasByNome, produtosByNome) {
+  const grupos = new Map(); // scopeKey -> { limite, idxs:[], items:[] }
+  sorted.forEach((issue, idx) => {
+    // Issues concluídas não disputam capacidade de sprint — ficam fora da
+    // diversificação (senão "gastariam" rodada sem aparecer na lista ativa,
+    // quebrando a intercalação visível quando "Concluídas" está oculto).
+    if (isDone(issue.st)) return;
+    const prod = produtosByNome?.get(issue.prod);
+    // Estrutura só é única por (nome, segmentoId) — não globalmente — então a
+    // busca precisa da chave composta para não colidir com um nome igual noutro segmento.
+    const est  = estruturasByNome?.get(`${issue.segId}::${issue.est}`);
+    const limite = prod?.limiteClientePorRodada ?? est?.limiteClientePorRodada ?? null;
+    if (limite == null || limite <= 0) return;
+    const key = prod?.limiteClientePorRodada != null ? `p:${prod.id}` : `e:${est.id}`;
+    if (!grupos.has(key)) grupos.set(key, { limite, idxs: [], items: [] });
+    const g = grupos.get(key);
+    g.idxs.push(idx);
+    g.items.push(issue);
+  });
+  if (!grupos.size) return sorted;
+  const out = [...sorted];
+  for (const { limite, idxs, items } of grupos.values()) {
+    const reord = roundRobinPorCliente(items, limite);
+    idxs.forEach((origIdx, i) => { out[origIdx] = reord[i]; });
   }
   return out;
 }
@@ -347,7 +433,7 @@ function curveBadge(curva) {
 }
 
 // ── MULTISELECT COMPONENT ─────────────────────────────────────────────────────
-function MultiSelect({ label, options, selected, onChange, placeholder }) {
+function MultiSelect({ label, options, selected, onChange, placeholder, compact }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -370,7 +456,7 @@ function MultiSelect({ label, options, selected, onChange, placeholder }) {
       : `${selected.length} selecionados`;
 
   return (
-    <div ref={ref} style={{ position:"relative", flex:"1 1 150px", minWidth:0 }}>
+    <div ref={ref} style={{ position:"relative", flex: compact ? "0 1 170px" : "1 1 150px", minWidth:0 }}>
       <div
         onClick={() => setOpen(o => !o)}
         style={{
@@ -630,6 +716,9 @@ const ISSUE_HEADER_ALIASES = {
   mc:        ["atende +1", "atende mais de um cliente", "atende multiplos clientes"],
   val:       ["valor"],
   imp:       ["impeditiva"],
+  dx:        ["dev exclusivo", "desenvolvimento exclusivo"],
+  pge:       ["pge", "planejamento estrategico"],
+  conv:      ["conversao"],
   desc:      ["descricao"],
   sp:        ["sprint"],
   pts:       ["story points", "storypoints", "pontos", "pontuacao"],
@@ -692,6 +781,9 @@ function parseIssueSheet(arrayBuffer) {
           mc:   cell(r,"mc")  === "" ? null : (Number(cell(r,"mc"))  || 0),
           val:  cell(r,"val") === "" ? null : (Number(cell(r,"val")) || 0),
           imp:  parseImpeditivaCell(cell(r,"imp")),
+          dx:   parseImpeditivaCell(cell(r,"dx")),
+          pge:  parseImpeditivaCell(cell(r,"pge")),
+          conv: parseImpeditivaCell(cell(r,"conv")),
           desc: String(cell(r,"desc") || "").trim() || null,
           curva: null,
           sp:   String(cell(r,"sp") || "").trim().slice(0,50) || null,
@@ -707,14 +799,14 @@ function parseIssueSheet(arrayBuffer) {
 function downloadIssueTemplate() {
   const header = [
     "Id", "Nome", "Categoria", "Cliente", "Produto", "Status",
-    "Data Abertura", "Roadmap", "Atende +1", "Valor", "Impeditiva", "Descrição", "Estrutura do Produto", "Sprint", "Story Points",
+    "Data Abertura", "Roadmap", "Atende +1", "Valor", "Impeditiva", "Dev Exclusivo", "PGE", "Conversao", "Descrição", "Estrutura do Produto", "Sprint", "Story Points",
   ];
   const exemplo = [
     101, "Erro no cálculo de férias", "Erro - prioridade alta", "Cliente Exemplo",
-    "Teknisa HCM", "Backlog", "01/03/2026", 0, 1, 5000, "Sim", "Descrição da issue", "Folha", "HCM36", 5,
+    "Teknisa HCM", "Backlog", "01/03/2026", 0, 1, 5000, "Sim", "Não", "Não", "Não", "Descrição da issue", "Folha", "HCM36", 5,
   ];
   const ws = XLSX.utils.aoa_to_sheet([header, exemplo]);
-  ws["!cols"] = [6,30,22,18,16,12,16,10,10,12,32,30,22,14,12].map(wch => ({ wch }));
+  ws["!cols"] = [6,30,22,18,16,12,16,10,10,12,16,16,14,16,30,22,14,12].map(wch => ({ wch }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Issues");
   XLSX.writeFile(wb, "modelo_importacao_issues.xlsx");
@@ -755,6 +847,7 @@ function parseClientSheet(arrayBuffer) {
             ch:     r[5] === "" ? null : (Number(r[5]) || 0),
             pr:     r[6] === "" ? null : (Number(r[6]) || 0),
             codigo: String(r[7] || "").trim() || null,
+            cc:     r[8] === "" || r[8] === undefined ? null : (Number(r[8]) || 0),
           });
         }
         resolve(clients.filter(x => x.n));
@@ -787,23 +880,30 @@ function PublicApp({ token }) {
   const [clientsData, setClientsData] = useState([]);
   const [deparaData, setDeparaData]   = useState([]);
   const [segmentosData, setSegmentosData] = useState([]);
+  const [estruturasData, setEstruturasData] = useState([]);
   const [criteriaData, setCriteriaData]   = useState([]);
   const [selectedSegmento, setSelectedSegmento] = useState(null); // null = Todos os segmentos
-  const [filters, setFilters] = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], search:"", dataAberturaDe:"", dataAberturaAte:"", pontuacao:"", limitePontos:"" });
+  const [filters, setFilters] = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], devExclusivo:"", search:"", dataAberturaDe:"", dataAberturaAte:"", pontuacao:"", limitePontos:"" });
   const [showDone, setShowDone] = useState(false);
 
   useEffect(() => {
     fetch(`${API}/publico/${token}/dados`)
       .then(r => { if (!r.ok) throw new Error(); return r.json(); })
-      .then(({ issues, clients, depara, segmentos }) => {
+      .then(({ issues, clients, depara, segmentos, estruturas }) => {
         setIssuesData(issues.map(apiIssueToApp));
         setClientsData(clients.map(apiClientToApp));
         setDeparaData(depara.map(d => ({ c: d.nomeCliente, i: d.nomeClienteIssue })));
         setSegmentosData(segmentos);
+        setEstruturasData(estruturas ?? []);
         setLoading(false);
       })
       .catch(() => { setError("Este link está inválido, expirado ou foi desativado."); setLoading(false); });
   }, [token]);
+
+  const produtosData = useMemo(() => segmentosData.flatMap(s => s.produtos ?? []), [segmentosData]);
+  // Chave composta (segmentoId + nome): Estrutura só é única por (nome, segmentoId).
+  const estruturasByNome = useMemo(() => new Map(estruturasData.map(e => [`${e.segmentoId}::${e.nome}`, e])), [estruturasData]);
+  const produtosByNome   = useMemo(() => new Map(produtosData.map(p => [p.nome, p])), [produtosData]);
 
   useEffect(() => {
     const url = `${API}/publico/${token}/criterios` + (selectedSegmento ? `?segmentoId=${selectedSegmento.id}` : "");
@@ -823,9 +923,10 @@ function PublicApp({ token }) {
   }, [enriched, selectedSegmento]);
 
   const sorted = useMemo(() => sortByCriteria(segmentEnriched, criteriaData), [segmentEnriched, criteriaData]);
+  const diversified = useMemo(() => applyDiversidadeCliente(sorted, estruturasByNome, produtosByNome), [sorted, estruturasByNome, produtosByNome]);
 
   const filteredIssues = useMemo(() => {
-    return sorted.filter(issue => {
+    return diversified.filter(issue => {
       if (showDone  && !isDone(issue.st)) return false;
       if (!showDone &&  isDone(issue.st)) return false;
       if (filters.status.length    && !filters.status.includes(issue.st))     return false;
@@ -835,7 +936,9 @@ function PublicApp({ token }) {
       if (filters.estrutura.length && !filters.estrutura.includes(issue.est)) return false;
       if (filters.segmento.length  && !filters.segmento.includes(issue.seg))  return false;
       if (filters.aprovacao.length && !filters.aprovacao.includes(issue.ap ?? "(Não analisado)")) return false;
-      if (filters.sprint.length    && !filters.sprint.includes(issue.sp || "(Sem sprint)")) return false;
+      if (filters.sprint.length    && !filters.sprint.some(v => (issue.sps?.length ? issue.sps : ["(Sem sprint)"]).includes(v))) return false;
+      if (filters.devExclusivo === "sim" && !issue.dx) return false;
+      if (filters.devExclusivo === "nao" && issue.dx) return false;
       if (filters.pontuacao === "com" && issue.pts == null) return false;
       if (filters.pontuacao === "sem" && issue.pts != null) return false;
       if (filters.dataAberturaDe  && (!issue.dt || issue.dt < filters.dataAberturaDe))  return false;
@@ -846,7 +949,7 @@ function PublicApp({ token }) {
       }
       return true;
     });
-  }, [sorted, filters, showDone]);
+  }, [diversified, filters, showDone]);
 
   const stats = useMemo(() => {
     const active = sorted.filter(x => !isDone(x.st));
@@ -859,7 +962,7 @@ function PublicApp({ token }) {
     };
   }, [sorted]);
 
-  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.sprint.length || filters.search || filters.dataAberturaDe || filters.dataAberturaAte || filters.pontuacao;
+  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.sprint.length || filters.devExclusivo || filters.search || filters.dataAberturaDe || filters.dataAberturaAte || filters.pontuacao;
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'100vh', fontFamily:'system-ui,sans-serif', gap:12 }}>
@@ -972,7 +1075,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   const [issuesData, setIssuesData] = useState([]);
   const [clientsData, setClientsData] = useState([]);
   const [deparaData, setDeparaData]   = useState([]);
-  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], search:"", dataAberturaDe:"", dataAberturaAte:"", pontuacao:"", limitePontos:"" });
+  const [filters, setFilters]       = useState({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], devExclusivo:"", search:"", dataAberturaDe:"", dataAberturaAte:"", pontuacao:"", limitePontos:"" });
   const [showDone, setShowDone]     = useState(false);
   const [importModal, setImportModal] = useState(null); // "issue" | "client" | null
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -983,6 +1086,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   const [loading, setLoading]            = useState(true);
   const [criteriaData, setCriteriaData]    = useState([]);
   const [segmentosData, setSegmentosData]  = useState([]);
+  const [estruturasData, setEstruturasData] = useState([]);
   const [selectedSegmento, setSelectedSegmento] = useState(null); // { id, nome }
   const [operadoresData, setOperadoresData] = useState([]);
   const [parametrosLLM, setParametrosLLM] = useState(null);
@@ -998,13 +1102,15 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
       apiFetch(API + '/clients'),
       apiFetch(API + '/depara'),
       apiFetch(API + '/segmentos'),
+      apiFetch(API + '/estruturas'),
     ])
       .then(rs => Promise.all(rs.map(r => r.json())))
-      .then(([iss, cl, dp, segs]) => {
+      .then(([iss, cl, dp, segs, ests]) => {
         setIssuesData(iss.map(apiIssueToApp))
         setClientsData(cl.map(apiClientToApp))
         setDeparaData(dp.map(d => ({ c: d.nomeCliente, i: d.nomeClienteIssue })))
         setSegmentosData(segs)
+        setEstruturasData(ests)
         // Seleciona o primeiro segmento disponível para este operador
         const options = isAdmin ? segs : (operador.segmentos ?? [])
         if (options.length) setSelectedSegmento(options[0])
@@ -1050,6 +1156,12 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
 
   const sorted = useMemo(() => sortByCriteria(segmentEnriched, criteriaData), [segmentEnriched, criteriaData]);
 
+  const produtosData = useMemo(() => segmentosData.flatMap(s => s.produtos ?? []), [segmentosData]);
+  // Chave composta (segmentoId + nome): Estrutura só é única por (nome, segmentoId).
+  const estruturasByNome = useMemo(() => new Map(estruturasData.map(e => [`${e.segmentoId}::${e.nome}`, e])), [estruturasData]);
+  const produtosByNome   = useMemo(() => new Map(produtosData.map(p => [p.nome, p])), [produtosData]);
+  const diversified = useMemo(() => applyDiversidadeCliente(sorted, estruturasByNome, produtosByNome), [sorted, estruturasByNome, produtosByNome]);
+
   function applyFilters(list, especOnly = false) {
     return list.filter(issue => {
       if (especOnly && issue.st !== "Especificação") return false;
@@ -1063,7 +1175,9 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
       if (filters.estrutura.length && !filters.estrutura.includes(issue.est)) return false;
       if (filters.segmento.length  && !filters.segmento.includes(issue.seg))  return false;
       if (filters.aprovacao.length && !filters.aprovacao.includes(issue.ap ?? "(Não analisado)")) return false;
-      if (filters.sprint.length    && !filters.sprint.includes(issue.sp || "(Sem sprint)")) return false;
+      if (filters.sprint.length    && !filters.sprint.some(v => (issue.sps?.length ? issue.sps : ["(Sem sprint)"]).includes(v))) return false;
+      if (filters.devExclusivo === "sim" && !issue.dx) return false;
+      if (filters.devExclusivo === "nao" && issue.dx) return false;
       if (filters.pontuacao === "com" && issue.pts == null) return false;
       if (filters.pontuacao === "sem" && issue.pts != null) return false;
       if (filters.dataAberturaDe  && (!issue.dt || issue.dt < filters.dataAberturaDe))  return false;
@@ -1077,12 +1191,12 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
   }
 
   const filteredIssues = useMemo(() => {
-    const list = applyFilters(sorted);
+    const list = applyFilters(diversified);
     if (filters.pontuacao === "com" && filters.limitePontos !== "") {
       return capByStoryPointsBudget(list, Number(filters.limitePontos));
     }
     return list;
-  }, [sorted, filters, showDone]);
+  }, [diversified, filters, showDone]);
   const filteredEspec  = useMemo(() => applyFilters(sorted, true),    [sorted, filters, showDone]);
 
   const stats = useMemo(() => {
@@ -1184,7 +1298,15 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids: [...ids], sprint: value }),
     });
-    setIssuesData(prev => prev.map(x => ids.has(x.id) ? { ...x, sp: value } : x));
+    // Cumulativo: em branco limpa o histórico; valor novo é acrescentado (sem duplicar
+    // se já for o último registrado) — espelha a regra aplicada no backend.
+    setIssuesData(prev => prev.map(x => {
+      if (!ids.has(x.id)) return x;
+      if (!value) return { ...x, sps: [] };
+      const sps = x.sps ?? [];
+      if (sps[sps.length - 1] === value) return x;
+      return { ...x, sps: [...sps, value] };
+    }));
     setSelectedIds(new Set());
   }
 
@@ -1211,6 +1333,23 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     });
     const saved = await res.json();
     setCriteriaData(prev => [...prev, saved]);
+  }
+  async function handleSaveLimiteEstrutura(id, limite) {
+    await apiFetch(API + "/estruturas/" + id, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limiteClientePorRodada: limite }),
+    });
+    setEstruturasData(prev => prev.map(e => e.id === id ? { ...e, limiteClientePorRodada: limite } : e));
+  }
+  async function handleSaveLimiteProduto(id, limite) {
+    await apiFetch(API + "/produtos/" + id, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limiteClientePorRodada: limite }),
+    });
+    setSegmentosData(prev => prev.map(s => ({
+      ...s,
+      produtos: (s.produtos ?? []).map(p => p.id === id ? { ...p, limiteClientePorRodada: limite } : p),
+    })));
   }
   async function handleDeleteCriterio(id) {
     await apiFetch(API + "/criterios/" + id, { method: "DELETE" });
@@ -1287,7 +1426,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
     setPainelPublico(saved);
   }
 
-  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.sprint.length || filters.search || filters.dataAberturaDe || filters.dataAberturaAte || filters.pontuacao;
+  const hasFilters = filters.status.length || filters.curva.length || filters.categoria.length || filters.produto.length || filters.estrutura.length || filters.segmento.length || filters.aprovacao.length || filters.sprint.length || filters.devExclusivo || filters.search || filters.dataAberturaDe || filters.dataAberturaAte || filters.pontuacao;
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'100vh', fontFamily:'system-ui,sans-serif', gap:12 }}>
@@ -1383,7 +1522,7 @@ function AuthenticatedApp({ operador, onLogout, setOperador }) {
         {tab==="issues"       && <IssuesTab issues={filteredIssues} allIssues={sorted.filter(x=>x.st!=="Especificação")} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={canEdit ? selectedIds : undefined} toggleSelect={canEdit ? toggleSelect : undefined} toggleSelectAll={canEdit ? toggleSelectAll : undefined} onEditSave={handleAddIssues} canEdit={canEdit} isAdmin={isAdmin} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} />}
         {tab==="especificacao"&& <IssuesTab issues={filteredEspec}  allIssues={sorted.filter(x=>x.st==="Especificação")} filters={filters} setFilters={setFilters} showDone={showDone} setShowDone={setShowDone} issuesData={issuesData} hasFilters={!!hasFilters} selectedIds={canEdit ? selectedIds : undefined} toggleSelect={canEdit ? toggleSelect : undefined} toggleSelectAll={canEdit ? toggleSelectAll : undefined} especMode onEditSave={handleAddIssues} canEdit={canEdit} isAdmin={isAdmin} segmentosData={segmentosData} criteriaData={criteriaData} selectedSegmento={selectedSegmento} especificacoesExistentes={especificacoesExistentes} onEspecificacaoGerada={marcarEspecificacaoGerada} />}
         {tab==="clientes"     && <ClientsTab clients={clientsData} onAddSingle={c => handleAddClients([c])} isAdmin={isAdmin} segmentosData={segmentosData} onSaveFatSeg={handleSaveFatSeg} onDeleteFatSeg={handleDeleteFatSeg} />}
-        {tab==="criterios"    && <CriteriosTab criteriaData={criteriaData} issues={filteredIssues} onToggle={handleToggleCriterio} onSave={handleSaveCriterio} onDelete={handleDeleteCriterio} onReorder={handleReorderCriterio} />}
+        {tab==="criterios"    && <CriteriosTab criteriaData={criteriaData} issues={filteredIssues} onToggle={handleToggleCriterio} onSave={handleSaveCriterio} onDelete={handleDeleteCriterio} onReorder={handleReorderCriterio} selectedSegmento={selectedSegmento} estruturasData={estruturasData} produtosData={produtosData} onSaveLimiteEstrutura={handleSaveLimiteEstrutura} onSaveLimiteProduto={handleSaveLimiteProduto} />}
         {tab==="operadores"   && <OperadoresTab operadores={operadoresData} segmentosData={segmentosData} currentOperadorId={operador.id} onCreate={handleCreateOperador} onUpdate={handleUpdateOperador} onDeactivate={handleDeactivateOperador} />}
         {tab==="parametros"   && <ParametrosTab parametros={parametrosLLM} onSave={handleSaveParametrosLLM} painelPublico={painelPublico} onGerarPainelPublico={handleGerarPainelPublico} onTogglePainelPublico={handleTogglePainelPublico} />}
       </div>
@@ -1561,7 +1700,11 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
         <span style={{ background:gs.bg, color:gs.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, whiteSpace:"nowrap", border:`0.5px solid ${gs.border}44`, flexShrink:0 }}>{gs.label}</span>
         <span style={{ background:cb.bg, color:cb.color, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, border:`0.5px solid ${cb.border}44`, flexShrink:0 }}>{issue._curva ? `Curva ${issue._curva}` : "Sem classificação"}</span>
         {issue.imp === 1 && <span style={{ background:"#FFF7ED", color:"#92400E", border:"0.5px solid #FCD34D88", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, flexShrink:0 }}>⛔ Impeditiva</span>}
-        {issue.sp && <span title={`Sprint ${issue.sp}`} style={{ background:"#0C447C", color:"#fff", border:"0.5px solid #0C447C", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:600, whiteSpace:"nowrap", flexShrink:0 }}>🏃 {issue.sp}</span>}
+        {issue.pge === 1 && <span title="PGE (Planejamento Estratégico)" style={{ background:"#F3E8FF", color:"#6B21A8", border:"0.5px solid #C084FC88", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, flexShrink:0 }}>🎯 PGE</span>}
+        {issue.conv === 1 && <span title="Conversão de plataforma" style={{ background:"#E0F2FE", color:"#075985", border:"0.5px solid #7DD3FC88", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, flexShrink:0 }}>🔄 Conversão</span>}
+        {issue.dx === 1 && <span title="Dev Exclusivo" style={{ background:"#ECFCCB", color:"#3F6212", border:"0.5px solid #BEF26488", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:500, flexShrink:0 }}>👤 Dev Exclusivo</span>}
+        {issue._client?.cc === 1 && <span title="Cliente em processo de cancelamento — nunca priorizada" style={{ background:"#F3F4F6", color:"#374151", border:"0.5px solid #9CA3AF88", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:600, flexShrink:0 }}>🚫 Cliente em cancelamento</span>}
+        {issue.sps?.length > 0 && <span title={`Histórico: ${issue.sps.join(" → ")}`} style={{ background:"#0C447C", color:"#fff", border:"0.5px solid #0C447C", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:600, whiteSpace:"nowrap", flexShrink:0 }}>🏃 {issue.sps.join(" → ")}</span>}
         {issue.pts != null && <span title="Story Points" style={{ background:"#EEEDFE", color:"#3C3489", border:"0.5px solid #534AB744", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:600, whiteSpace:"nowrap", flexShrink:0 }}>🧩 {issue.pts} pts</span>}
         <span style={{ fontSize:13, fontWeight:500, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{issue.n}</span>
         <span style={{ fontSize:12, color:"var(--color-text-secondary)", whiteSpace:"nowrap", flexShrink:0 }}>{issue.cl}</span>
@@ -1595,12 +1738,16 @@ function IssueRow({ issue, rank, compact, selected, onToggle, onEdit, onEspecifi
           <Field label="Produto"           value={issue.prod} />
           <Field label="Estrutura do Produto" value={issue.est} />
           <Field label="Data Abertura"     value={issue.dt} />
-          <Field label="Sprint"            value={issue.sp} />
+          <Field label="Sprint (histórico)" value={issue.sps?.length ? issue.sps.join(" → ") : null} />
           <Field label="Story Points"      value={issue.pts} />
           <Field label="Dias em aberto"    value={days+" dias"} color={days>180?"#E24B4A":days>90?"#BA7517":undefined} />
           <Field label="É Impeditiva"      value={issue.imp ? "Sim" : "Não"} color={issue.imp ? "#92400E" : undefined} />
+          <Field label="Dev Exclusivo"     value={issue.dx ? "Sim" : "Não"} />
+          <Field label="PGE"               value={issue.pge ? "Sim" : "Não"} />
+          <Field label="Conversão"         value={issue.conv ? "Sim" : "Não"} />
           <Field label="Roadmap"           value={issue.rm ? "Sim" : "Não"} />
           <Field label="Atende +1 cliente" value={issue.mc ? "Sim" : "Não"} />
+          {issue._client?.cc === 1 && <Field label="Cliente" value="Em processo de cancelamento — nunca priorizada" color="#A32D2D" />}
           {!isPublic && <Field label="Valor"             value={issue.val>0 ? `R$ ${issue.val.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />}
           {isAdmin && !isPublic && <Field label="Faturamento do cliente" value={issue._client ? `R$ ${(issue._client.fat||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—"} />}
           <Field label="Aprovação" value={issue.ap ?? "(Não analisado)"} color={issue.ap==="Não"?"#A32D2D":issue.ap==="Sim"?"#27500A":undefined} />
@@ -1657,15 +1804,17 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
   const allProdutos   = useMemo(() => [...new Set(issuesData.map(x => x.prod))].sort(), [issuesData]);
   const allEstruturas = useMemo(() => [...new Set(issuesData.map(x => x.est))].filter(Boolean).sort(), [issuesData]);
   const allSegmentos  = useMemo(() => (segmentosData ?? []).map(s => s.nome).sort(),    [segmentosData]);
-  const allSprints    = useMemo(() => [...new Set(issuesData.map(x => x.sp).filter(Boolean))].sort(), [issuesData]);
+  const allSprints    = useMemo(() => [...new Set(issuesData.flatMap(x => x.sps ?? []))].sort(), [issuesData]);
 
   // Total de story points por sprint entre as issues atualmente listadas (após filtros).
+  // Uma issue com histórico de múltiplas sprints (replanejada) soma seus pontos em
+  // CADA sprint pela qual passou — reflete que ela "estourou" a sprint anterior.
   const pointsBySprint = useMemo(() => {
     const map = new Map();
     for (const issue of issues) {
       if (issue.pts == null) continue;
-      const key = issue.sp || "(Sem sprint)";
-      map.set(key, (map.get(key) ?? 0) + issue.pts);
+      const keys = issue.sps?.length ? issue.sps : ["(Sem sprint)"];
+      for (const key of keys) map.set(key, (map.get(key) ?? 0) + issue.pts);
     }
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0], "pt-BR"));
   }, [issues]);
@@ -1694,7 +1843,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             </button>
           )}
           {hasFilters && (
-            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], search:"", dataAberturaDe:"", dataAberturaAte:"", pontuacao:"", limitePontos:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
+            <button onClick={() => setFilters({ status:[], curva:[], categoria:[], produto:[], estrutura:[], segmento:[], aprovacao:[], sprint:[], devExclusivo:"", search:"", dataAberturaDe:"", dataAberturaAte:"", pontuacao:"", limitePontos:"" })} style={{ fontSize:12, whiteSpace:"nowrap" }}>
               <i className="ti ti-x" style={{ fontSize:13 }} aria-hidden /> Limpar
             </button>
           )}
@@ -1748,6 +1897,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             onChange={v => sf("aprovacao", v)}
           />
           <MultiSelect
+            compact
             placeholder="Sprint (todas)"
             options={[...allSprints, "(Sem sprint)"]}
             selected={filters.sprint}
@@ -1758,7 +1908,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
               value={filters.pontuacao}
               onChange={e => sf("pontuacao", e.target.value)}
               style={{
-                background:"var(--color-background-secondary)",
+                width:128, background:"var(--color-background-secondary)",
                 border:"0.5px solid var(--color-border-secondary)",
                 borderRadius:8, padding:"7px 10px", fontSize:13,
               }}
@@ -1772,15 +1922,28 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
                 type="number" min="0"
                 value={filters.limitePontos}
                 onChange={e => sf("limitePontos", e.target.value)}
-                placeholder="Limite de pontos"
+                placeholder="Limite"
                 style={{
-                  width:140, background:"var(--color-background-secondary)",
+                  width:90, background:"var(--color-background-secondary)",
                   border:"0.5px solid var(--color-border-secondary)",
                   borderRadius:8, padding:"7px 10px", fontSize:13,
                 }}
               />
             )}
           </div>
+          <select
+            value={filters.devExclusivo}
+            onChange={e => sf("devExclusivo", e.target.value)}
+            style={{
+              width:130, background:"var(--color-background-secondary)",
+              border:"0.5px solid var(--color-border-secondary)",
+              borderRadius:8, padding:"7px 10px", fontSize:13,
+            }}
+          >
+            <option value="">Dev Excl. (todas)</option>
+            <option value="sim">Dev Excl.: Sim</option>
+            <option value="nao">Dev Excl.: Não</option>
+          </select>
           <div style={{ display:"flex", alignItems:"center", gap:6, flex:"1 1 260px", minWidth:0 }}>
             <span style={{ fontSize:12, color:"var(--color-text-tertiary)", whiteSpace:"nowrap" }}>Abertura de</span>
             <input
@@ -1817,6 +1980,7 @@ function IssuesTab({ issues, allIssues, filters, setFilters, showDone, setShowDo
             {filters.segmento.map(v => <FilterTag key={v} label={`Segmento: ${v}`} onRemove={() => sf("segmento", filters.segmento.filter(x=>x!==v))} />)}
             {filters.aprovacao.map(v => <FilterTag key={v} label={`Aprovação: ${v}`} onRemove={() => sf("aprovacao", filters.aprovacao.filter(x=>x!==v))} />)}
             {filters.sprint.map(v => <FilterTag key={v} label={`Sprint: ${v}`} onRemove={() => sf("sprint", filters.sprint.filter(x=>x!==v))} />)}
+            {filters.devExclusivo && <FilterTag label={`Dev Exclusivo: ${filters.devExclusivo === "sim" ? "Sim" : "Não"}`} onRemove={() => sf("devExclusivo","")} />}
             {filters.pontuacao === "com" && <FilterTag label={`Com pontuação${filters.limitePontos !== "" ? ` (limite ${filters.limitePontos})` : ""}`} onRemove={() => { sf("pontuacao",""); sf("limitePontos",""); }} />}
             {filters.pontuacao === "sem" && <FilterTag label="Sem pontuação" onRemove={() => sf("pontuacao","")} />}
             {filters.dataAberturaDe && <FilterTag label={`Abertura de: ${filters.dataAberturaDe}`} onRemove={() => sf("dataAberturaDe","")} />}
@@ -2102,8 +2266,8 @@ function ClientsTab({ clients, onAddSingle, isAdmin, segmentosData, onSaveFatSeg
   const [editClient, setEditClient]       = useState(null);
   const [sort, setSort] = useState({ field: isAdmin ? "fat" : "n", dir: isAdmin ? "desc" : "asc" });
   const gridCols = isAdmin
-    ? "2fr 0.8fr 1fr 1.2fr 1fr 1fr 1fr 1fr 36px"
-    : "2fr 0.8fr 1fr 1fr 1fr 1fr 1fr 36px";
+    ? "2fr 0.8fr 1fr 1.2fr 1fr 1fr 1fr 1fr 1fr 36px"
+    : "2fr 0.8fr 1fr 1fr 1fr 1fr 1fr 1fr 36px";
   const filtered = clients.filter(c => !search || normName(c.n).includes(normName(search)));
   const sorted = [...filtered].sort((a, b) => {
     const mul = sort.dir === "asc" ? 1 : -1;
@@ -2133,7 +2297,7 @@ function ClientsTab({ clients, onAddSingle, isAdmin, segmentosData, onSaveFatSeg
       </div>
       <div style={{ background:"var(--color-background-primary)", borderRadius:12, border:"0.5px solid var(--color-border-tertiary)", overflow:"hidden" }}>
         <div style={{ padding:"10px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"grid", gridTemplateColumns:gridCols, gap:8, fontSize:11, color:"var(--color-text-tertiary)", fontWeight:500 }}>
-          {th("Cliente","n")}{th("Código","codigo")}{th("Curva","cv")}{isAdmin && th("Faturamento","fat")}{th("Tipo","tp")}{th("Churn","ch")}{th("Projeto","pr")}{th("Impeditivas","im")}<span />
+          {th("Cliente","n")}{th("Código","codigo")}{th("Curva","cv")}{isAdmin && th("Faturamento","fat")}{th("Tipo","tp")}{th("Churn","ch")}{th("Projeto","pr")}{th("Cancelamento","cc")}{th("Impeditivas","im")}<span />
         </div>
         {sorted.map(c => {
           const cb = curveBadge(c.cv);
@@ -2146,9 +2310,10 @@ function ClientsTab({ clients, onAddSingle, isAdmin, segmentosData, onSaveFatSeg
               <span style={{ fontSize:12, color:"var(--color-text-secondary)" }}>{c.tp}</span>
               <span>{c.ch ? <span style={{ color:"#E24B4A",fontSize:12 }}>Sim</span> : <span style={{ color:"var(--color-text-tertiary)",fontSize:12 }}>Não</span>}</span>
               <span>{c.pr ? <span style={{ color:"#185FA5",fontSize:12 }}>Sim</span> : <span style={{ color:"var(--color-text-tertiary)",fontSize:12 }}>Não</span>}</span>
+              <span>{c.cc ? <span style={{ color:"#A32D2D",fontWeight:600,fontSize:12 }}>Sim</span> : <span style={{ color:"var(--color-text-tertiary)",fontSize:12 }}>Não</span>}</span>
               <span style={{ fontSize:12, textAlign:"center" }}>{c.im}</span>
               <button
-                onClick={() => { const d = { id:c.id, n:c.n, ac:c.ac??"", fat:(c.fat??0).toFixed(2), tp:c.tp??"REAL", cv:c.cv??"B", ch:String(c.ch??0), pr:String(c.pr??0), codigo:c.codigo??"", fatSegs:c.fatSegs??[] }; setEditClient(d); }}
+                onClick={() => { const d = { id:c.id, n:c.n, ac:c.ac??"", fat:(c.fat??0).toFixed(2), tp:c.tp??"REAL", cv:c.cv??"B", ch:String(c.ch??0), pr:String(c.pr??0), cc:String(c.cc??0), codigo:c.codigo??"", fatSegs:c.fatSegs??[] }; setEditClient(d); }}
                 title="Editar cliente"
                 style={{ padding:"3px 6px", borderRadius:6, border:"0.5px solid var(--color-border-secondary)", background:"transparent", cursor:"pointer", color:"var(--color-text-tertiary)", display:"flex", alignItems:"center", justifyContent:"center" }}
               >
@@ -2165,7 +2330,7 @@ function ClientsTab({ clients, onAddSingle, isAdmin, segmentosData, onSaveFatSeg
 }
 
 // ── CRITERIOS TAB ─────────────────────────────────────────────────────────────
-function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReorder }) {
+function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReorder, selectedSegmento, estruturasData, produtosData, onSaveLimiteEstrutura, onSaveLimiteProduto }) {
   const [showForm, setShowForm]           = useState(false);
   const [form, setForm]                   = useState({ nome:"", peso:"", tipo:"issue", atributo:"isErro", valor:"", direcao:"desc" });
   const [delId, setDelId]                 = useState(null);
@@ -2376,6 +2541,29 @@ function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReor
         </div>
       )}
 
+      {/* ── Diversidade de clientes por Estrutura/Produto ── */}
+      {selectedSegmento && (estruturasData?.length > 0 || produtosData?.length > 0) && (
+        <div style={{ marginTop:28 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+            <i className="ti ti-users-group" style={{ fontSize:15, color:"var(--color-text-tertiary)" }} />
+            <span style={{ fontWeight:500, fontSize:14 }}>Diversidade de Clientes na Priorização</span>
+          </div>
+          <div style={{ fontSize:12, color:"var(--color-text-tertiary)", marginBottom:12 }}>
+            Limite de issues do mesmo cliente por "rodada" de priorização, por Estrutura e/ou Produto. Ao atingir o limite,
+            as próximas issues desse cliente cedem lugar às de outros clientes; o ciclo recomeça até esgotar o backlog.
+            Sem limite informado, a priorização segue normalmente. Limite do Produto tem precedência sobre o da Estrutura.
+          </div>
+          <div style={{ background:"var(--color-background-primary)", borderRadius:12, border:"0.5px solid var(--color-border-tertiary)", overflow:"hidden" }}>
+            {estruturasData.filter(e => e.segmentoId === selectedSegmento.id).map(e => (
+              <LimiteRow key={"e"+e.id} label={e.nome} sub="Estrutura" value={e.limiteClientePorRodada} onSave={v => onSaveLimiteEstrutura(e.id, v)} />
+            ))}
+            {produtosData.filter(p => p.segmentoId === selectedSegmento.id).map(p => (
+              <LimiteRow key={"p"+p.id} label={p.nome} sub="Produto" value={p.limiteClientePorRodada} onSave={v => onSaveLimiteProduto(p.id, v)} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {delId !== null && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:2000 }}>
           <div style={{ background:"var(--color-background-primary)", borderRadius:16, border:"0.5px solid var(--color-border-tertiary)", padding:28, width:360, textAlign:"center" }}>
@@ -2393,6 +2581,32 @@ function CriteriosTab({ criteriaData, issues, onToggle, onSave, onDelete, onReor
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function LimiteRow({ label, sub, value, onSave }) {
+  const [val, setVal] = useState(value ?? "");
+  const [saving, setSaving] = useState(false);
+  async function handleBlur() {
+    const num = val === "" ? null : Number(val);
+    if (num === (value ?? null)) return;
+    setSaving(true);
+    await onSave(num);
+    setSaving(false);
+  }
+  return (
+    <div style={{ padding:"8px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)", display:"flex", alignItems:"center", gap:8 }}>
+      <span style={{ fontSize:11, color:"var(--color-text-tertiary)", background:"var(--color-background-secondary)", borderRadius:4, padding:"1px 6px", flexShrink:0 }}>{sub}</span>
+      <span style={{ fontSize:13, flex:1 }}>{label}</span>
+      <input
+        type="number" min="1" value={val}
+        onChange={e => setVal(e.target.value)}
+        onBlur={handleBlur}
+        placeholder="Sem limite"
+        style={{ width:120, padding:"6px 8px", borderRadius:6, border:"0.5px solid var(--color-border-secondary)", fontSize:13, background:"var(--color-background-secondary)" }}
+      />
+      {saving && <i className="ti ti-loader-2 ti-spin" style={{ fontSize:12, color:"var(--color-text-tertiary)" }} />}
     </div>
   );
 }
@@ -3119,7 +3333,7 @@ function ImportClientModal({ onClose, onSave, existingClients, isAdmin }) {
   const [preview, setPreview] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
-  const [form, setForm]       = useState({ n:"", ac:"", fat:"0", tp:"REAL", cv:"B", ch:"0", pr:"0", codigo:"" });
+  const [form, setForm]       = useState({ n:"", ac:"", fat:"0", tp:"REAL", cv:"B", ch:"0", pr:"0", cc:"0", codigo:"" });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
 
   // Verifica se o nome do formulário manual já existe
@@ -3149,7 +3363,7 @@ function ImportClientModal({ onClose, onSave, existingClients, isAdmin }) {
 
   function handleManualSave() {
     if (!form.n) return setError("Nome do cliente é obrigatório.");
-    onSave([{ ...form, fat:Number(form.fat), ch:Number(form.ch), pr:Number(form.pr), codigo:form.codigo||null }]);
+    onSave([{ ...form, fat:Number(form.fat), ch:Number(form.ch), pr:Number(form.pr), cc:Number(form.cc), codigo:form.codigo||null }]);
     onClose();
   }
 
@@ -3184,7 +3398,7 @@ function ImportClientModal({ onClose, onSave, existingClients, isAdmin }) {
             <div style={{ fontWeight:500, marginBottom:6, fontSize:13 }}>Layout esperado (linha 1 = cabeçalho):</div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:4 }}>
               {[["A","Cliente (nome)"],["B","Data Aceite (DD/MM/AAAA)"],["C","Faturamento Atual (R$)"],["D","Tipo (PROJETO/REAL)"],
-                ["E","Curva (S/A/B/C/D)"],["F","Risco Churn (0/1)"],["G","Em Projeto (0/1)"],["H","Código do Cliente"]].map(([col,desc]) => (
+                ["E","Curva (S/A/B/C/D)"],["F","Risco Churn (0/1)"],["G","Em Projeto (0/1)"],["H","Código do Cliente"],["I","Em Cancelamento (0/1)"]].map(([col,desc]) => (
                 <div key={col} style={{ display:"flex", gap:4, alignItems:"center" }}>
                   <span style={{ background:"var(--color-background-info)", color:"var(--color-text-info)", borderRadius:4, padding:"1px 6px", fontSize:11, fontWeight:500, flexShrink:0 }}>{col}</span>
                   <span style={{ color:"var(--color-text-secondary)", fontSize:11 }}>{desc}</span>
@@ -3291,6 +3505,9 @@ function ImportClientModal({ onClose, onSave, existingClients, isAdmin }) {
             <FInput label="Risco de Churn" value={form.ch} onChange={v=>set("ch",v)} select options={[{value:"0",label:"Não"},{value:"1",label:"Sim"}]} />
             <FInput label="Em Projeto" value={form.pr} onChange={v=>set("pr",v)} select options={[{value:"0",label:"Não"},{value:"1",label:"Sim"}]} />
           </FRow>
+          <FRow>
+            <FInput label="Em Cancelamento" value={form.cc} onChange={v=>set("cc",v)} select options={[{value:"0",label:"Não"},{value:"1",label:"Sim"}]} />
+          </FRow>
           {error && <div style={{ color:"#E24B4A", fontSize:12, marginBottom:8 }}>{error}</div>}
           <div style={{ display:"flex", justifyContent:"flex-end" }}>
             <button onClick={handleManualSave} style={{ background:"var(--color-text-primary)", color:"var(--color-background-primary)", border:"none", padding:"8px 20px", fontSize:13 }}>
@@ -3309,7 +3526,7 @@ const CAT_OPTS = ["Erro - prioridade alta","Erro - prioridade média","Erro - pr
 
 function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento }) {
   const today = new Date().toISOString().slice(0,10);
-  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", est:"", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", val:"0.00", curva:"", sp:"", pts:"", ob:"", desc:"", ap:"", mr:"" });
+  const [form, setForm] = useState({ id:"", n:"", cat:"Erro - prioridade alta", cl:"", prod:"", est:"", st:"Backlog", dt:today, rm:"0", mc:"0", imp:"0", dx:"0", pge:"0", conv:"0", val:"0.00", curva:"", sp:"", pts:"", ob:"", desc:"", ap:"", mr:"" });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
   const [produtos, setProdutos] = useState([]);
   const [estruturas, setEstruturas] = useState([]);
@@ -3357,6 +3574,7 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
       id: Number(form.id), n: form.n, cat: form.cat||null, cl: form.cl,
       prod: form.prod||null, est: form.est||null, st: form.st||null, dt: form.dt||null,
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
+      dx: Number(form.dx), pge: Number(form.pge), conv: Number(form.conv),
       val: form.val !== "" ? Number(form.val) : null,
       curva: form.curva||null, sp: form.sp.trim().slice(0,50) || null, pts: form.pts !== "" ? Number(form.pts) : null, ob: form.ob||null, desc: form.desc||null,
       ap: form.ap||null, mr: form.ap==="Não" ? form.mr||null : null,
@@ -3423,6 +3641,11 @@ function SingleIssueModal({ onClose, onSave, existingIssues, selectedSegmento })
         <FInput label="Roadmap" value={form.rm} onChange={v=>set("rm",v)} select options={BOOLOPS} />
         <FInput label="Atende +1 cliente" value={form.mc} onChange={v=>set("mc",v)} select options={BOOLOPS} />
       </FRow>
+      <FRow mb={12}>
+        <FInput label="Dev Exclusivo" value={form.dx} onChange={v=>set("dx",v)} select options={BOOLOPS} />
+        <FInput label="PGE (Planejamento Estratégico)" value={form.pge} onChange={v=>set("pge",v)} select options={BOOLOPS} />
+        <FInput label="Conversão" value={form.conv} onChange={v=>set("conv",v)} select options={BOOLOPS} />
+      </FRow>
       <FRow>
         <FInput label="Aprovação" value={form.ap} onChange={v=>set("ap",v)} select options={[{value:"",label:"(Não analisado)"},{value:"Sim",label:"Sim"},{value:"Não",label:"Não"}]} />
       </FRow>
@@ -3473,11 +3696,11 @@ function FatSegRow({ segNome, initialValue, fatSegId, clienteId, segmentoId, onS
 
 // Cadastro rápido de cliente único (botão na aba Clientes)
 function SingleClientModal({ onClose, onSave, initialData, isAdmin, segmentosData, onSaveFatSeg, onDeleteFatSeg }) {
-  const [form, setForm] = useState(initialData ?? { n:"", ac:"", fat:"0.00", tp:"REAL", cv:"B", ch:"0", pr:"0", codigo:"", fatSegs:[] });
+  const [form, setForm] = useState(initialData ?? { n:"", ac:"", fat:"0.00", tp:"REAL", cv:"B", ch:"0", pr:"0", cc:"0", codigo:"", fatSegs:[] });
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
   function handleSave() {
     if (!form.n) return alert("Nome do cliente é obrigatório.");
-    onSave({ ...form, fat:Number(form.fat), ch:Number(form.ch), pr:Number(form.pr) });
+    onSave({ ...form, fat:Number(form.fat), ch:Number(form.ch), pr:Number(form.pr), cc:Number(form.cc) });
     onClose();
   }
   const boolOpts = [{value:"0",label:"Não"},{value:"1",label:"Sim"}];
@@ -3489,6 +3712,7 @@ function SingleClientModal({ onClose, onSave, initialData, isAdmin, segmentosDat
       {isAdmin && <FRow><FInput label="Faturamento Mensal Total (R$)" value={form.fat} onChange={v=>set("fat",v)} type="number" step="0.01" /></FRow>}
       <FRow><FInput label="Curva" value={form.cv} onChange={v=>set("cv",v)} select options={["S","A","B","C","D"]} /><FInput label="Tipo" value={form.tp} onChange={v=>set("tp",v)} select options={["REAL","PROJETO"]} /></FRow>
       <FRow><FInput label="Risco de Churn" value={form.ch} onChange={v=>set("ch",v)} select options={boolOpts} /><FInput label="Em Projeto" value={form.pr} onChange={v=>set("pr",v)} select options={boolOpts} /></FRow>
+      <FRow><FInput label="Em Cancelamento" value={form.cc} onChange={v=>set("cc",v)} select options={boolOpts} /></FRow>
       {isAdmin && isEdit && segmentosData?.length > 0 && (
         <div style={{ marginTop:16, borderTop:"0.5px solid var(--color-border-tertiary)", paddingTop:16 }}>
           <div style={{ fontWeight:500, fontSize:13, marginBottom:10 }}>Faturamento por Segmento</div>
@@ -3532,9 +3756,12 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
     rm:   String(issue.rm  ?? 0),
     mc:   String(issue.mc  ?? 0),
     imp:  String(issue.imp ?? 0),
+    dx:   String(issue.dx  ?? 0),
+    pge:  String(issue.pge ?? 0),
+    conv: String(issue.conv ?? 0),
     val:  (issue.val ?? 0).toFixed(2),
     curva: issue.curva ?? "",
-    sp:   issue.sp   ?? "",
+    sp:   issue.sps?.length ? issue.sps[issue.sps.length - 1] : "",
     pts:  issue.pts != null ? String(issue.pts) : "",
     ob:   issue.ob   ?? "",
     desc: issue.desc ?? "",
@@ -3583,6 +3810,7 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
       id: issue.id, n: form.n, cat: form.cat || null, cl: form.cl,
       prod: form.prod || null, est: form.est || null, st: form.st || null, dt: form.dt || null,
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
+      dx: Number(form.dx), pge: Number(form.pge), conv: Number(form.conv),
       val: form.val !== "" ? Number(form.val) : null,
       curva: form.curva || null, sp: form.sp.trim().slice(0,50) || null, pts: form.pts !== "" ? Number(form.pts) : null, ob: form.ob || null, desc: form.desc || null,
       seg: issue.seg, segOrd: issue.segOrd,
@@ -3631,12 +3859,23 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
       <FRow>
         <FInput label="Data Abertura" value={form.dt} onChange={v=>set("dt",v)} type="date" />
         <FInput label="Curva" value={form.curva} onChange={v=>set("curva",v)} select options={["","S","A","B","C","D"]} />
-        <FInput label="Sprint" value={form.sp} onChange={v=>set("sp",v)} maxLength={50} />
+        <div style={{ flex:1 }}>
+          <FInput label="Sprint" value={form.sp} onChange={v=>set("sp",v)} maxLength={50} />
+          {issue.sps?.length > 1 && (
+            <div style={{ fontSize:11, color:"var(--color-text-tertiary)", marginTop:2 }}>Histórico: {issue.sps.join(" → ")}</div>
+          )}
+          <div style={{ fontSize:11, color:"var(--color-text-tertiary)", marginTop:2 }}>Alterar acrescenta ao histórico (replanejamento); deixar em branco limpa todo o histórico.</div>
+        </div>
       </FRow>
       <FRow>
         <FInput label="É Impeditiva" value={form.imp} onChange={v=>set("imp",v)} select options={[{value:"0",label:"Não"},{value:"1",label:"Sim"}]} />
         <FInput label="Roadmap" value={form.rm} onChange={v=>set("rm",v)} select options={[{value:"0",label:"Não"},{value:"1",label:"Sim"}]} />
         <FInput label="Atende +1 cliente" value={form.mc} onChange={v=>set("mc",v)} select options={[{value:"0",label:"Não"},{value:"1",label:"Sim"}]} />
+      </FRow>
+      <FRow>
+        <FInput label="Dev Exclusivo" value={form.dx} onChange={v=>set("dx",v)} select options={[{value:"0",label:"Não"},{value:"1",label:"Sim"}]} />
+        <FInput label="PGE (Planejamento Estratégico)" value={form.pge} onChange={v=>set("pge",v)} select options={[{value:"0",label:"Não"},{value:"1",label:"Sim"}]} />
+        <FInput label="Conversão" value={form.conv} onChange={v=>set("conv",v)} select options={[{value:"0",label:"Não"},{value:"1",label:"Sim"}]} />
       </FRow>
       <FRow>
         <FInput label="Valor (R$)" value={form.val} onChange={v=>set("val",v)} type="number" step="0.01" />

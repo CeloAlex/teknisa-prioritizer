@@ -76,6 +76,22 @@ async function applyMigrations() {
        ativo BOOLEAN NOT NULL DEFAULT true,
        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
      )`,
+    `ALTER TABLE "Issue" ADD COLUMN IF NOT EXISTS "devExclusivo" BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE "Issue" ADD COLUMN IF NOT EXISTS "pge" BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE "Issue" ADD COLUMN IF NOT EXISTS "conversao" BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE "Client" ADD COLUMN IF NOT EXISTS "emCancelamento" BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE "Estrutura" ADD COLUMN IF NOT EXISTS "limiteClientePorRodada" INTEGER`,
+    `ALTER TABLE "Produto" ADD COLUMN IF NOT EXISTS "limiteClientePorRodada" INTEGER`,
+    // Sprint cumulativa: "sprint" (string única) vira "sprints" (histórico). Backfill
+    // preserva o valor atual como primeiro item antes de remover a coluna antiga —
+    // condicional porque, em ambientes onde este passo já rodou, "sprint" não existe mais.
+    `ALTER TABLE "Issue" ADD COLUMN IF NOT EXISTS "sprints" TEXT[] NOT NULL DEFAULT '{}'`,
+    `DO $$ BEGIN
+       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'Issue' AND column_name = 'sprint') THEN
+         UPDATE "Issue" SET "sprints" = ARRAY["sprint"] WHERE "sprint" IS NOT NULL AND "sprint" <> '' AND cardinality("sprints") = 0;
+         ALTER TABLE "Issue" DROP COLUMN "sprint";
+       END IF;
+     END $$`,
   ]
   for (const sql of steps) {
     await prisma.$executeRawUnsafe(sql)
@@ -405,13 +421,14 @@ app.get('/api/publico/:token/dados', async (req, reply) => {
   const painel = await getPainelPublicoAtivo(req.params.token)
   if (!painel) return reply.status(404).send({ error: 'Link inválido, expirado ou desativado.' })
 
-  const [issues, clients, depara, segmentos] = await Promise.all([
+  const [issues, clients, depara, segmentos, estruturas] = await Promise.all([
     issuesComSegmento(),
     prisma.client.findMany({ orderBy: { nome: 'asc' }, include: { faturamentoSegmentos: true } }),
     prisma.depara.findMany({ orderBy: { nomeCliente: 'asc' } }),
     prisma.segmento.findMany({ orderBy: { id: 'asc' }, include: { produtos: true } }),
+    prisma.estrutura.findMany({ orderBy: { nome: 'asc' } }),
   ])
-  return { issues, clients, depara, segmentos }
+  return { issues, clients, depara, segmentos, estruturas }
 })
 
 app.get('/api/publico/:token/criterios', async (req, reply) => {
@@ -540,7 +557,7 @@ function mergeDate(incoming, existingVal, isUpdate) {
 async function upsertIssue(data, existingMap) {
   const { id, nome, categoria, cliente, produto, estrutura, status, dataAbertura,
           roadmap, atendeMultiplos, valor, curva, sprint, storyPoints, observacao, descricao, impeditiva,
-          aprovacao, motivoReprovacao, segmentoId } = data
+          devExclusivo, pge, conversao, aprovacao, motivoReprovacao, segmentoId } = data
 
   if (!id || !nome) {
     throw Object.assign(new Error('id e nome são obrigatórios'), { statusCode: 400 })
@@ -588,15 +605,29 @@ async function upsertIssue(data, existingMap) {
     valor:            mergeNum(valor, existing?.valor, isUpdate),
     // Sem default: issue nova sem curva informada e sem cliente casado nasce "sem classificação".
     curva:            mergeStr(curva, existing?.curva, isUpdate),
-    sprint:           mergeStr(sprint, existing?.sprint, isUpdate),
     storyPoints:      mergeNum(storyPoints, existing?.storyPoints, isUpdate),
     observacao:       mergeStr(observacao, existing?.observacao, isUpdate),
     descricao:        mergeStr(descricao, existing?.descricao, isUpdate),
     impeditiva:       mergeBool(impeditiva, existing?.impeditiva, isUpdate),
+    devExclusivo:     mergeBool(devExclusivo, existing?.devExclusivo, isUpdate),
+    pge:              mergeBool(pge, existing?.pge, isUpdate),
+    conversao:        mergeBool(conversao, existing?.conversao, isUpdate),
     aprovacao:        mergeStr(aprovacao, existing?.aprovacao, isUpdate),
     motivoReprovacao: mergeStr(motivoReprovacao, existing?.motivoReprovacao, isUpdate),
   }
-  if (commonFields.sprint) commonFields.sprint = String(commonFields.sprint).trim().slice(0, 50) || null
+
+  // Sprint agora é cumulativa: o campo "sprint" enviado (singular, contrato de API
+  // inalterado) é acrescentado ao histórico "sprints" quando diferente do último
+  // registrado, em vez de sobrescrever — preserva o rastro de replanejamentos.
+  if (sprint !== undefined) {
+    const existingSprints = existing?.sprints ?? []
+    const sprintValue = sprint != null ? String(sprint).trim().slice(0, 50) || null : null
+    if (!sprintValue) {
+      commonFields.sprints = []
+    } else if (sprintValue !== existingSprints[existingSprints.length - 1]) {
+      commonFields.sprints = [...existingSprints, sprintValue]
+    }
+  }
 
   return prisma.issue.upsert({
     where:  { id: issueId },
@@ -661,14 +692,26 @@ app.put('/api/issues/bulk-sprint', async (req, reply) => {
   const { ids, sprint } = req.body
   if (!ids?.length) return reply.status(400).send({ error: 'ids é obrigatório' })
 
+  const numericIds = ids.map(Number)
   const value = sprint ? String(sprint).trim().slice(0, 50) || null : null
 
-  await prisma.issue.updateMany({
-    where: { id: { in: ids.map(Number) } },
-    data:  { sprint: value },
-  })
+  if (!value) {
+    // Em branco: limpa o histórico de sprints das issues selecionadas.
+    await prisma.issue.updateMany({ where: { id: { in: numericIds } }, data: { sprints: [] } })
+    return { updated: numericIds.length, sprint: null }
+  }
 
-  return { updated: ids.length, sprint: value }
+  // Cumulativo: acrescenta ao histórico só das issues cujo último sprint registrado
+  // ainda não é este valor (evita duplicar entradas consecutivas iguais — ex.: ao
+  // reaplicar a mesma sprint em issues que já a têm, misturadas com outras que não têm).
+  const issues = await prisma.issue.findMany({ where: { id: { in: numericIds } }, select: { id: true, sprints: true } })
+  await prisma.$transaction(
+    issues
+      .filter(i => i.sprints[i.sprints.length - 1] !== value)
+      .map(i => prisma.issue.update({ where: { id: i.id }, data: { sprints: { push: value } } }))
+  )
+
+  return { updated: numericIds.length, sprint: value }
 })
 
 app.delete('/api/issues/:id', async (req, reply) => {
@@ -687,7 +730,7 @@ app.get('/api/clients', async (req) => {
 })
 
 async function upsertClient(data, existingMap, operadorPapel) {
-  const { nome, aceite, faturamento, tipo, curva, riscoChurn, projeto, codigo } = data
+  const { nome, aceite, faturamento, tipo, curva, riscoChurn, projeto, emCancelamento, codigo } = data
 
   if (!nome) {
     throw Object.assign(new Error('nome é obrigatório'), { statusCode: 400 })
@@ -702,6 +745,7 @@ async function upsertClient(data, existingMap, operadorPapel) {
     curva:      mergeStr(curva, existing?.curva, isUpdate, 'B'),
     riscoChurn: mergeBool(riscoChurn, existing?.riscoChurn, isUpdate),
     projeto:    mergeBool(projeto, existing?.projeto, isUpdate),
+    emCancelamento: mergeBool(emCancelamento, existing?.emCancelamento, isUpdate),
     codigo:     mergeStr(codigo, existing?.codigo, isUpdate),
   }
   // Faturamento só pode ser definido/alterado por Administrador — nunca sobrescrito por Editor.
@@ -849,6 +893,18 @@ app.post('/api/produtos', async (req, reply) => {
   return produto
 })
 
+app.put('/api/produtos/:id', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+  const id = Number(req.params.id)
+  const data = {}
+  if (req.body.nome != null) data.nome = req.body.nome
+  if ('limiteClientePorRodada' in req.body) {
+    data.limiteClientePorRodada = req.body.limiteClientePorRodada != null ? Number(req.body.limiteClientePorRodada) : null
+  }
+  const produto = await prisma.produto.update({ where: { id }, data })
+  return produto
+})
+
 app.delete('/api/produtos/:id', async (req, reply) => {
   if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
   await prisma.produto.delete({ where: { id: Number(req.params.id) } }).catch(() => null)
@@ -872,6 +928,18 @@ app.post('/api/estruturas', async (req, reply) => {
     update: {},
     create: { nome, segmentoId: Number(segmentoId) },
   })
+  return estrutura
+})
+
+app.put('/api/estruturas/:id', async (req, reply) => {
+  if (!requireRole(req, reply, ['ADMIN', 'EDITOR'])) return
+  const id = Number(req.params.id)
+  const data = {}
+  if (req.body.nome != null) data.nome = req.body.nome
+  if ('limiteClientePorRodada' in req.body) {
+    data.limiteClientePorRodada = req.body.limiteClientePorRodada != null ? Number(req.body.limiteClientePorRodada) : null
+  }
+  const estrutura = await prisma.estrutura.update({ where: { id }, data })
   return estrutura
 })
 

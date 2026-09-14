@@ -20,11 +20,14 @@ model Issue {
   atendeMultiplos  Boolean   @default(false)
   valor            Float?
   curva            String?
-  sprint           String?
+  sprints          String[]  @default([])
   storyPoints      Int?
   observacao       String?
   descricao        String?
   impeditiva       Boolean   @default(false)
+  devExclusivo     Boolean   @default(false)
+  pge              Boolean   @default(false)
+  conversao        Boolean   @default(false)
   aprovacao        String?
   motivoReprovacao String?
   createdAt        DateTime  @default(now())
@@ -42,6 +45,7 @@ model Client {
   curva                String?
   riscoChurn           Boolean               @default(false)
   projeto              Boolean               @default(false)
+  emCancelamento       Boolean               @default(false)
   qtdImpeditivas       Int                   @default(0)
   faturamentoSegmentos FaturamentoSegmento[]
   createdAt            DateTime              @default(now())
@@ -100,21 +104,23 @@ model Operador {
 }
 
 model Produto {
-  id         Int      @id @default(autoincrement())
-  nome       String   @unique
-  segmentoId Int
-  segmento   Segmento @relation(fields: [segmentoId], references: [id])
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id                     Int      @id @default(autoincrement())
+  nome                   String   @unique
+  segmentoId             Int
+  segmento               Segmento @relation(fields: [segmentoId], references: [id])
+  limiteClientePorRodada Int?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 }
 
 model Estrutura {
-  id         Int      @id @default(autoincrement())
-  nome       String
-  segmentoId Int
-  segmento   Segmento @relation(fields: [segmentoId], references: [id])
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id                     Int      @id @default(autoincrement())
+  nome                   String
+  segmentoId             Int
+  segmento               Segmento @relation(fields: [segmentoId], references: [id])
+  limiteClientePorRodada Int?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   @@unique([nome, segmentoId])
 }
