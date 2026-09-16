@@ -394,10 +394,14 @@ function roundRobinPorCliente(items, limite) {
 function applyDiversidadeCliente(sorted, estruturasByNome, produtosByNome) {
   const grupos = new Map(); // scopeKey -> { limite, idxs:[], items:[] }
   sorted.forEach((issue, idx) => {
-    // Issues concluídas não disputam capacidade de sprint — ficam fora da
-    // diversificação (senão "gastariam" rodada sem aparecer na lista ativa,
-    // quebrando a intercalação visível quando "Concluídas" está oculto).
-    if (isDone(issue.st)) return;
+    // Issues concluídas ou em Especificação não disputam capacidade de sprint —
+    // ficam fora da diversificação. Especificação em particular é exibida numa
+    // aba separada na tela do operador (nunca entra em "Issues Priorizadas"),
+    // mas o Painel Público mistura tudo numa lista só; se essas issues não
+    // forem excluídas aqui, elas "gastariam" cota do round-robin de um jeito
+    // que a tela do operador nunca reproduz, fazendo a ordem final divergir
+    // entre as duas telas mesmo para o mesmo segmento/critérios/limite.
+    if (isDone(issue.st) || issue.st === "Especificação") return;
     const prod = produtosByNome?.get(issue.prod);
     // Estrutura só é única por (nome, segmentoId) — não globalmente — então a
     // busca precisa da chave composta para não colidir com um nome igual noutro segmento.
