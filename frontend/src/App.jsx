@@ -343,34 +343,42 @@ function capByStoryPointsBudget(issues, limite) {
   return out;
 }
 
-// Reorganiza um grupo de issues (já na ordem de prioridade) em rodadas: a cada
-// rodada, cada cliente contribui com até `limite` das suas issues de maior
-// prioridade ainda não usadas, respeitando a ordem em que os clientes aparecem
-// no grupo original; quando um cliente esgota o backlog ele simplesmente é
-// pulado, e o ciclo recomeça do primeiro cliente na rodada seguinte, até
-// esgotar todas as issues do grupo. Promove diversidade de clientes sem mudar
-// a prioridade relativa das issues de cada cliente entre si.
+// Agrupa pelo cliente CADASTRADO (já resolvido via De-Para/match fuzzy em
+// _client), não pelo texto bruto da issue — variações de grafia do mesmo
+// cliente entre issues diferentes não devem contar como clientes distintos.
+function clienteKey(issue) {
+  return issue._client ? `c:${issue._client.id}` : `n:${issue.cl || "(Sem cliente)"}`;
+}
+
+// Reorganiza um grupo de issues (já na ordem de prioridade) em rodadas: a
+// rodada percorre a lista JÁ NA ORDEM DE PRIORIDADE uma única vez, aceitando
+// cada issue imediatamente a menos que o cliente dela já tenha atingido o
+// limite NESTA rodada — nesse caso a issue é adiada para a rodada seguinte,
+// mantendo sua posição relativa entre as demais issues adiadas. Isso garante
+// que uma issue só perde posição por causa de OUTRAS issues do mesmo cliente
+// que vieram antes dela, nunca por causa de issues de terceiros — diferente
+// de simplesmente deixar cada cliente "despejar" um lote de `limite` issues
+// de uma vez numa ordem fixa de clientes, o que distorceria a prioridade real
+// (uma issue de prioridade alta de um cliente "tardio" na sequência podia
+// ficar atrás de issues de prioridade mais baixa de um cliente "cedo" na
+// sequência, só porque este já estava com seu lote em andamento).
 function roundRobinPorCliente(items, limite) {
-  const ordem = [];
-  const filas = new Map();
-  for (const issue of items) {
-    // Agrupa pelo cliente CADASTRADO (já resolvido via De-Para/match fuzzy em
-    // _client), não pelo texto bruto da issue — variações de grafia do mesmo
-    // cliente entre issues diferentes não devem contar como clientes distintos.
-    const ck = issue._client ? `c:${issue._client.id}` : `n:${issue.cl || "(Sem cliente)"}`;
-    if (!filas.has(ck)) { filas.set(ck, []); ordem.push(ck); }
-    filas.get(ck).push(issue);
-  }
   const out = [];
-  let restantes = items.length;
-  while (restantes > 0) {
-    for (const ck of ordem) {
-      const fila = filas.get(ck);
-      if (!fila.length) continue;
-      const leva = fila.splice(0, limite);
-      out.push(...leva);
-      restantes -= leva.length;
+  let restantes = items;
+  while (restantes.length > 0) {
+    const usadosNaRodada = new Map();
+    const proximaRodada = [];
+    for (const issue of restantes) {
+      const ck = clienteKey(issue);
+      const usados = usadosNaRodada.get(ck) ?? 0;
+      if (usados < limite) {
+        out.push(issue);
+        usadosNaRodada.set(ck, usados + 1);
+      } else {
+        proximaRodada.push(issue);
+      }
     }
+    restantes = proximaRodada;
   }
   return out;
 }
