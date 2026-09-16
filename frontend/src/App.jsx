@@ -939,6 +939,11 @@ function PublicApp({ token }) {
 
   const filteredIssues = useMemo(() => {
     return diversified.filter(issue => {
+      // Issues em Especificação ficam numa aba própria na tela do operador logado
+      // e nunca aparecem em "Issues Priorizadas" ali — o Painel Público (que não
+      // tem essa aba separada) segue a mesma regra para não divergir a ordem/
+      // numeração exibida entre as duas telas.
+      if (issue.st === "Especificação") return false;
       if (showDone  && !isDone(issue.st)) return false;
       if (!showDone &&  isDone(issue.st)) return false;
       if (filters.status.length    && !filters.status.includes(issue.st))     return false;
