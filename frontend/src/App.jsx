@@ -3829,7 +3829,9 @@ function EditIssueModal({ issue, onClose, onSave, selectedSegmento }) {
       rm: Number(form.rm), mc: Number(form.mc), imp: Number(form.imp),
       dx: Number(form.dx), pge: Number(form.pge), conv: Number(form.conv),
       val: form.val !== "" ? Number(form.val) : null,
-      curva: form.curva || null, sp: form.sp.trim().slice(0,50) || null, pts: form.pts !== "" ? Number(form.pts) : null, ob: form.ob || null, desc: form.desc || null,
+      // sp vai como "" (e não null) quando em branco: null significa "não informado"
+      // e preservaria o histórico; "" explícito é o que limpa a sprint na edição.
+      curva: form.curva || null, sp: form.sp.trim().slice(0,50), pts: form.pts !== "" ? Number(form.pts) : null, ob: form.ob || null, desc: form.desc || null,
       seg: issue.seg, segOrd: issue.segOrd,
       ap: form.ap || null, mr: form.ap === "Não" ? form.mr || null : null,
     }]);

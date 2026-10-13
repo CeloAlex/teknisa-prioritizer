@@ -619,9 +619,11 @@ async function upsertIssue(data, existingMap) {
   // Sprint agora é cumulativa: o campo "sprint" enviado (singular, contrato de API
   // inalterado) é acrescentado ao histórico "sprints" quando diferente do último
   // registrado, em vez de sobrescrever — preserva o rastro de replanejamentos.
-  if (sprint !== undefined) {
+  // Segue o contrato de merge dos demais campos: ausente/null = "não informado"
+  // (preserva o histórico); só "" explícito limpa.
+  if (sprint !== undefined && sprint !== null) {
     const existingSprints = existing?.sprints ?? []
-    const sprintValue = sprint != null ? String(sprint).trim().slice(0, 50) || null : null
+    const sprintValue = String(sprint).trim().slice(0, 50)
     if (!sprintValue) {
       commonFields.sprints = []
     } else if (sprintValue !== existingSprints[existingSprints.length - 1]) {
