@@ -2895,7 +2895,7 @@ function PainelPublicoCard({ painelPublico, onGerar, onToggle }) {
 function ParametrosTab({ parametros, onSave, painelPublico, onGerarPainelPublico, onTogglePainelPublico }) {
   const [apiKey, setApiKey] = useState("");
   const [modeloTexto, setModeloTexto] = useState("gpt-4o");
-  const [modeloImagem, setModeloImagem] = useState("gpt-image-1");
+  const [modeloImagem, setModeloImagem] = useState("gpt-image-2");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
@@ -2903,7 +2903,7 @@ function ParametrosTab({ parametros, onSave, painelPublico, onGerarPainelPublico
   useEffect(() => {
     if (!parametros) return;
     setModeloTexto(parametros.modeloTexto ?? "gpt-4o");
-    setModeloImagem(parametros.modeloImagem ?? "gpt-image-1");
+    setModeloImagem(parametros.modeloImagem ?? "gpt-image-2");
   }, [parametros]);
 
   async function handleSave() {

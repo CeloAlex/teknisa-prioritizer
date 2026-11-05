@@ -355,7 +355,7 @@ app.get('/api/parametros/llm', async (req, reply) => {
     configurado: !!p,
     apiKeyMascarada: p ? `••••${p.apiKey.slice(-4)}` : null,
     modeloTexto: p?.modeloTexto ?? 'gpt-4o',
-    modeloImagem: p?.modeloImagem ?? 'gpt-image-1',
+    modeloImagem: p?.modeloImagem ?? 'gpt-image-2',
   }
 })
 
@@ -377,7 +377,7 @@ app.put('/api/parametros/llm', async (req, reply) => {
       provider: 'openai',
       apiKey,
       modeloTexto: modeloTexto || 'gpt-4o',
-      modeloImagem: modeloImagem || 'gpt-image-1',
+      modeloImagem: modeloImagem || 'gpt-image-2',
     },
   })
   return {
@@ -1043,6 +1043,23 @@ function descreverErroOpenAI(e) {
   return 'Não foi possível gerar os requisitos via IA. Tente novamente.'
 }
 
+function descreverErroImagem(e, modelo) {
+  const code = e?.error?.code || e?.code
+  const msg = e?.error?.message || e?.message || ''
+  if (/does not exist|model_not_found/i.test(msg) || code === 'model_not_found') {
+    return `o modelo de imagem "${modelo}" não existe mais na OpenAI. Altere o "Modelo de imagem" em Parâmetros (ex.: gpt-image-2).`
+  }
+  if (e?.status === 403 && /verif/i.test(msg)) {
+    return 'a organização OpenAI precisa ser verificada para usar este modelo de imagem (platform.openai.com/settings/organization/general).'
+  }
+  if (e?.status === 400 && /safety|moderation/i.test(msg)) {
+    return 'a OpenAI recusou a edição pelo filtro de segurança.'
+  }
+  const base = descreverErroOpenAI(e)
+  if (base !== 'Não foi possível gerar os requisitos via IA. Tente novamente.') return base
+  return `${e?.status ? `HTTP ${e.status} – ` : ''}${msg || 'erro desconhecido'}`
+}
+
 async function getIssueSegmentoNome(issueProdutoNome) {
   if (!issueProdutoNome) return null
   const produtos = await prisma.produto.findMany({ include: { segmento: true } })
@@ -1211,26 +1228,28 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
 
   const avisos = []
   const anexosFinais = []
-  const imagensAntes = []
   const imagensDepois = []
   let mockupsGerados = 0
   let mockupsMantidos = 0
 
+  // Retorna { editada, motivo }: motivo descreve a última falha, para que o aviso mostre a causa real.
   async function editarComRetry(buffer, mimeType, prompt, contextoLog) {
     const tentativasMax = 3
+    let motivo = null
     for (let tentativa = 1; tentativa <= tentativasMax; tentativa++) {
       try {
         const editada = await editarImagem({ buffer, mimeType, prompt, apiKey: parametro.apiKey, modelo: parametro.modeloImagem })
         req.log.info({ issueId, ...contextoLog, tentativa }, 'especificacao.imagem_editada')
-        return editada
+        return { editada, motivo: null }
       } catch (e) {
         const status = e?.status
         const transitorio = status >= 500 || status === 429
+        motivo = descreverErroImagem(e, parametro.modeloImagem)
         req.log.error({ issueId, ...contextoLog, tentativa, err: e }, 'especificacao.imagem_falha')
-        if (!transitorio || tentativa === tentativasMax) return null
+        if (!transitorio || tentativa === tentativasMax) return { editada: null, motivo }
       }
     }
-    return null
+    return { editada: null, motivo }
   }
 
   // 1) Anexos de uma especificação anterior: aplica a decisão (MANTER/ATUALIZAR/SUBSTITUIR/REMOVER).
@@ -1247,8 +1266,6 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
       continue
     }
 
-    imagensAntes.push({ buffer: item.anexo.dadosOriginais })
-
     if (tipoDecisao === 'MANTER') {
       mockupsMantidos++
       anexosFinais.push({
@@ -1256,32 +1273,31 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
         dadosOriginais: item.anexo.dadosOriginais, dadosEditados: item.anexo.dadosEditados,
         status: 'ATIVO', motivoDecisao: decisaoInfo?.motivo ?? null,
       })
-      if (item.anexo.dadosEditados) imagensDepois.push({ buffer: item.anexo.dadosEditados })
+      // Sem versão editada, entra o original para a tela não sumir do documento.
+      imagensDepois.push({ buffer: item.anexo.dadosEditados ?? item.anexo.dadosOriginais })
       continue
     }
 
     // ATUALIZAR ou SUBSTITUIR: sempre a partir do original pristine, nunca de uma edição anterior.
     const prompt = montarPromptMockup(decisaoInfo.mockup, requisitos.objetivo)
-    const editada = await editarComRetry(item.anexo.dadosOriginais, item.anexo.mimeType, prompt, { tela: decisaoInfo.mockup?.tela, decisao: tipoDecisao, rotulo: item.rotulo })
+    const { editada, motivo } = await editarComRetry(item.anexo.dadosOriginais, item.anexo.mimeType, prompt, { tela: decisaoInfo.mockup?.tela, decisao: tipoDecisao, rotulo: item.rotulo })
     if (editada) mockupsGerados++
-    else avisos.push(`Não foi possível gerar o mockup atualizado de "${item.filename}" após novas tentativas; a versão anterior foi mantida no documento.`)
+    else avisos.push(`Não foi possível gerar o mockup atualizado de "${item.filename}" após novas tentativas; a versão anterior foi mantida no documento. Motivo: ${motivo}`)
     anexosFinais.push({
       nomeArquivo: item.anexo.nomeArquivo, mimeType: item.anexo.mimeType,
       dadosOriginais: item.anexo.dadosOriginais, dadosEditados: editada ?? item.anexo.dadosEditados,
       status: 'ATIVO', motivoDecisao: decisaoInfo?.motivo ?? null,
     })
-    const imagemFinal = editada ?? item.anexo.dadosEditados
-    if (imagemFinal) imagensDepois.push({ buffer: imagemFinal })
+    imagensDepois.push({ buffer: editada ?? item.anexo.dadosEditados ?? item.anexo.dadosOriginais })
   }
 
   // 2) Imagens novas enviadas nesta rodada: sempre editadas, com prompt específico por tela quando a IA associou um mockup a este arquivo.
   for (const img of imagens) {
     const mockup = (requisitos.mockups ?? []).find(m => m.referenciaImagem === img.filename)
     const prompt = montarPromptMockup(mockup, requisitos.objetivo)
-    imagensAntes.push({ buffer: img.buffer })
-    const editada = await editarComRetry(img.buffer, img.mimeType, prompt, { tela: mockup?.tela, decisao: 'NOVA', arquivo: img.filename })
+    const { editada, motivo } = await editarComRetry(img.buffer, img.mimeType, prompt, { tela: mockup?.tela, decisao: 'NOVA', arquivo: img.filename })
     if (editada) mockupsGerados++
-    else avisos.push(`Não foi possível gerar o mockup de "${img.filename}" após novas tentativas; a tela ficará no documento apenas na versão original.`)
+    else avisos.push(`Não foi possível gerar o mockup de "${img.filename}" após novas tentativas; a tela ficará no documento apenas na versão original. Motivo: ${motivo}`)
     anexosFinais.push({
       nomeArquivo: img.filename, mimeType: img.mimeType,
       dadosOriginais: img.buffer, dadosEditados: editada ?? null,
@@ -1292,7 +1308,7 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
 
   const operador = req.operador
   const dataStr = new Date().toLocaleDateString('pt-BR')
-  const docInput = { issue, operadorNome: operador.nome, segmentoNome, dataStr, requisitos, imagensAntes, imagensDepois }
+  const docInput = { issue, operadorNome: operador.nome, segmentoNome, dataStr, requisitos, imagensDepois }
 
   const [docxBuffer, pdfBuffer] = await Promise.all([
     buildDocx(docInput),

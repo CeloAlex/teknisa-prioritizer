@@ -73,7 +73,7 @@ function bullet(text, level = 0) {
   return new Paragraph({ bullet: { level }, spacing: { after: 60 }, children: [new TextRun({ text, size: 22 })] })
 }
 
-export async function buildDocx({ issue, operadorNome, segmentoNome, dataStr, requisitos, imagensAntes = [], imagensDepois = [] }) {
+export async function buildDocx({ issue, operadorNome, segmentoNome, dataStr, requisitos, imagensDepois = [] }) {
   const logoBuffer = readFileSync(join(__dirname, '..', '..', 'frontend', 'src', 'assets', 'teknisa-logo.png'))
   const logoDim = fitImage(logoBuffer, 140, 40)
 
@@ -166,11 +166,7 @@ export async function buildDocx({ issue, operadorNome, segmentoNome, dataStr, re
   children.push(heading('9. Resultado Esperado'))
   children.push(body(requisitos.resultadoEsperado))
 
-  // Imagens
-  if (imagensAntes.length) {
-    children.push(heading('Antes da implementação'))
-    imagensAntes.forEach(img => children.push(...imageParagraph(img.buffer)))
-  }
+  // Imagens: só a versão após a implementação (o print original não entra no documento)
   if (imagensDepois.length) {
     children.push(heading('Após a implementação: (imagens meramente ilustrativas)'))
     imagensDepois.forEach(img => children.push(...imageParagraph(img.buffer)))

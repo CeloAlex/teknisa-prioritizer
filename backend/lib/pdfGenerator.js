@@ -48,7 +48,7 @@ function ensureSpace(doc, needed) {
   if (doc.y + needed > doc.page.height - MARGIN - 30) doc.addPage()
 }
 
-export async function buildPdf({ issue, operadorNome, segmentoNome, dataStr, requisitos, imagensAntes = [], imagensDepois = [] }, imageSizeFn) {
+export async function buildPdf({ issue, operadorNome, segmentoNome, dataStr, requisitos, imagensDepois = [] }, imageSizeFn) {
   const logoBuffer = readFileSync(join(__dirname, '..', '..', 'frontend', 'src', 'assets', 'teknisa-logo.png'))
   const logoDim0 = imageSizeFn(logoBuffer)
   const logoScale = Math.min(120 / logoDim0.width, 1)
@@ -151,10 +151,7 @@ export async function buildPdf({ issue, operadorNome, segmentoNome, dataStr, req
     doc.y += h + 16
   }
 
-  if (imagensAntes.length) {
-    heading(doc, 'Antes da implementação')
-    imagensAntes.forEach(addImageBlock)
-  }
+  // Só a versão após a implementação (o print original não entra no documento)
   if (imagensDepois.length) {
     heading(doc, 'Após a implementação: (imagens meramente ilustrativas)')
     imagensDepois.forEach(addImageBlock)

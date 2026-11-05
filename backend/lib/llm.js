@@ -299,7 +299,7 @@ export async function editarImagem({ buffer, mimeType, prompt, apiKey, modelo })
   const file = await toFile(buffer, `imagem.${ext}`, { type: mimeType })
   const result = await client.images.edit({
     image: file,
-    model: modelo || 'gpt-image-1',
+    model: modelo || 'gpt-image-2',
     prompt,
   })
   const b64 = result.data?.[0]?.b64_json
