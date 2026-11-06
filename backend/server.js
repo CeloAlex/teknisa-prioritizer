@@ -366,20 +366,25 @@ app.put('/api/parametros/llm', async (req, reply) => {
   if (!existing && !apiKey) {
     return reply.status(400).send({ error: 'Informe a apiKey na primeira configuração' })
   }
-  const p = await prisma.parametroLLM.upsert({
-    where: { provider: 'openai' },
-    update: {
-      ...(apiKey ? { apiKey } : {}),
-      ...(modeloTexto ? { modeloTexto } : {}),
-      ...(modeloImagem ? { modeloImagem } : {}),
-    },
-    create: {
-      provider: 'openai',
-      apiKey,
-      modeloTexto: modeloTexto || 'gpt-4o',
-      modeloImagem: modeloImagem || 'gpt-image-2',
-    },
-  })
+  // update/create separados: o Prisma valida o bloco "create" de um upsert mesmo quando o registro
+  // existe, e sem apiKey (alteração só dos modelos) ele falharia com 500.
+  const p = existing
+    ? await prisma.parametroLLM.update({
+      where: { provider: 'openai' },
+      data: {
+        ...(apiKey ? { apiKey } : {}),
+        ...(modeloTexto ? { modeloTexto } : {}),
+        ...(modeloImagem ? { modeloImagem } : {}),
+      },
+    })
+    : await prisma.parametroLLM.create({
+      data: {
+        provider: 'openai',
+        apiKey,
+        modeloTexto: modeloTexto || 'gpt-4o',
+        modeloImagem: modeloImagem || 'gpt-image-2',
+      },
+    })
   return {
     configurado: true,
     apiKeyMascarada: `••••${p.apiKey.slice(-4)}`,
