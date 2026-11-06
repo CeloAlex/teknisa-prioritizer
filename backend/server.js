@@ -1176,7 +1176,7 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
   const anexosAnteriores = (especAnterior?.anexos ?? []).map((anexo, i) => ({
     rotulo: `anexo_${i + 1}`,
     filename: anexo.nomeArquivo,
-    // images.edit (gpt-image-1) sempre retorna PNG, independente do formato de entrada — se
+    // images.edit sempre retorna PNG, independente do formato de entrada — se
     // estamos mostrando a versão editada, o mimeType correto é PNG, não o do upload original.
     mimeType: anexo.dadosEditados ? 'image/png' : anexo.mimeType,
     buffer: anexo.dadosEditados ?? anexo.dadosOriginais,
@@ -1257,43 +1257,39 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
     return { editada: null, motivo }
   }
 
+  // Só a imagem resultante é guardada (em dadosOriginais, coluna obrigatória; dadosEditados fica nulo):
+  // o print anterior à implementação não aparece mais no documento, então não é mantido.
+  // images.edit sempre devolve PNG.
+  const anexoResultante = (nomeArquivo, imagem, mimeType, status, motivoDecisao) =>
+    ({ nomeArquivo, mimeType, dadosOriginais: imagem, dadosEditados: null, status, motivoDecisao })
+
   // 1) Anexos de uma especificação anterior: aplica a decisão (MANTER/ATUALIZAR/SUBSTITUIR/REMOVER).
+  //    item.buffer/item.mimeType já são a imagem resultante da rodada anterior.
   for (const item of anexosAnteriores) {
     const decisaoInfo = decisaoPorRotulo.get(item.rotulo)
     const tipoDecisao = decisaoInfo?.tipo ?? 'MANTER'
+    const motivoDecisao = decisaoInfo?.motivo ?? null
 
     if (tipoDecisao === 'REMOVER') {
-      anexosFinais.push({
-        nomeArquivo: item.anexo.nomeArquivo, mimeType: item.anexo.mimeType,
-        dadosOriginais: item.anexo.dadosOriginais, dadosEditados: item.anexo.dadosEditados,
-        status: 'REMOVIDO', motivoDecisao: decisaoInfo?.motivo ?? null,
-      })
+      anexosFinais.push(anexoResultante(item.filename, item.buffer, item.mimeType, 'REMOVIDO', motivoDecisao))
       continue
     }
 
     if (tipoDecisao === 'MANTER') {
       mockupsMantidos++
-      anexosFinais.push({
-        nomeArquivo: item.anexo.nomeArquivo, mimeType: item.anexo.mimeType,
-        dadosOriginais: item.anexo.dadosOriginais, dadosEditados: item.anexo.dadosEditados,
-        status: 'ATIVO', motivoDecisao: decisaoInfo?.motivo ?? null,
-      })
-      // Sem versão editada, entra o original para a tela não sumir do documento.
-      imagensDepois.push({ buffer: item.anexo.dadosEditados ?? item.anexo.dadosOriginais })
+      anexosFinais.push(anexoResultante(item.filename, item.buffer, item.mimeType, 'ATIVO', motivoDecisao))
+      imagensDepois.push({ buffer: item.buffer })
       continue
     }
 
-    // ATUALIZAR ou SUBSTITUIR: sempre a partir do original pristine, nunca de uma edição anterior.
+    // ATUALIZAR ou SUBSTITUIR: edita a partir da imagem resultante anterior (é a única guardada).
     const prompt = montarPromptMockup(decisaoInfo.mockup, requisitos.objetivo)
-    const { editada, motivo } = await editarComRetry(item.anexo.dadosOriginais, item.anexo.mimeType, prompt, { tela: decisaoInfo.mockup?.tela, decisao: tipoDecisao, rotulo: item.rotulo })
+    const { editada, motivo } = await editarComRetry(item.buffer, item.mimeType, prompt, { tela: decisaoInfo.mockup?.tela, decisao: tipoDecisao, rotulo: item.rotulo })
     if (editada) mockupsGerados++
     else avisos.push(`Não foi possível gerar o mockup atualizado de "${item.filename}" após novas tentativas; a versão anterior foi mantida no documento. Motivo: ${motivo}`)
-    anexosFinais.push({
-      nomeArquivo: item.anexo.nomeArquivo, mimeType: item.anexo.mimeType,
-      dadosOriginais: item.anexo.dadosOriginais, dadosEditados: editada ?? item.anexo.dadosEditados,
-      status: 'ATIVO', motivoDecisao: decisaoInfo?.motivo ?? null,
-    })
-    imagensDepois.push({ buffer: editada ?? item.anexo.dadosEditados ?? item.anexo.dadosOriginais })
+    const imagem = editada ?? item.buffer
+    anexosFinais.push(anexoResultante(item.filename, imagem, editada ? 'image/png' : item.mimeType, 'ATIVO', motivoDecisao))
+    imagensDepois.push({ buffer: imagem })
   }
 
   // 2) Imagens novas enviadas nesta rodada: sempre editadas, com prompt específico por tela quando a IA associou um mockup a este arquivo.
@@ -1303,12 +1299,9 @@ app.post('/api/issues/:id/especificacao/gerar', async (req, reply) => {
     const { editada, motivo } = await editarComRetry(img.buffer, img.mimeType, prompt, { tela: mockup?.tela, decisao: 'NOVA', arquivo: img.filename })
     if (editada) mockupsGerados++
     else avisos.push(`Não foi possível gerar o mockup de "${img.filename}" após novas tentativas; a tela ficará no documento apenas na versão original. Motivo: ${motivo}`)
-    anexosFinais.push({
-      nomeArquivo: img.filename, mimeType: img.mimeType,
-      dadosOriginais: img.buffer, dadosEditados: editada ?? null,
-      status: 'ATIVO', motivoDecisao: null,
-    })
-    imagensDepois.push({ buffer: editada ?? img.buffer })
+    const imagem = editada ?? img.buffer
+    anexosFinais.push(anexoResultante(img.filename, imagem, editada ? 'image/png' : img.mimeType, 'ATIVO', null))
+    imagensDepois.push({ buffer: imagem })
   }
 
   const operador = req.operador
